@@ -1,44 +1,79 @@
 package Main;
 
-import java.net.Socket;
-import java.net.ServerSocket;
 import java.io.*;
+import java.net.ServerSocket;
+import java.net.Socket;
 
-// This is the main class that starts the server
 public class Main {
     public static void main(String[] args) {
-        // Print a message to show the server is starting
-        System.out.println("Logs from your program will appear here!");
+        // Print a log that the server has started
+        System.out.println("Server started at port 6379");
 
-        ServerSocket serverSocket = null; // This will listen for new clients
-        Socket clientSocket = null; // This will hold the connection to a client
-        int port = 6379; // The port number to listen on (6379 is the default for Redis)
+        int port = 6379; // Port number used by Redis server
 
-        try {
-            serverSocket = new ServerSocket(port); // Start listening for connections
-            serverSocket.setReuseAddress(true); // Allow the server to restart quickly on the same port
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            serverSocket.setReuseAddress(true); // Allow socket to be reused quickly after close
 
-            // Keep running forever, accepting new clients
+            // Continuously accept new client connections
             while (true) {
-                Socket client = serverSocket.accept(); // Wait for a client to connect
-                System.out.println("Client connected: "); // Print a message when a client connects
+                Socket client = serverSocket.accept(); // Accept a new client
+                System.out.println("Client connected.");
 
-                // Create a new thread to handle this client
-                MultipleResponses multipleResponses = new MultipleResponses(client);
-                multipleResponses.start(); // Start the thread, so it can talk to the client
-            }
-        } catch (IOException e) {
-            // If there is an error starting the server, print the error message
-            System.out.println("IOException: " + e.getMessage());
-        } finally {
-            // When the server stops, close the client connection if it was open
-            try {
-                if (clientSocket != null) {
-                    clientSocket.close();
+                // Create a reader to read the first command from client
+                BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                String firstLine = reader.readLine(); // Read first line of input
+
+                // If client sends nothing, skip to next connection
+                if (firstLine == null) {
+                    client.close();
+                    continue;
                 }
-            } catch (IOException e) {
-                System.out.println("IOException: " + e.getMessage());
+
+                // Check if the command follows Redis RESP format
+                if (firstLine.startsWith("*")) {
+                    int argsCount = Integer.parseInt(firstLine.substring(1)); // Number of arguments
+                    String[] arguments = new String[argsCount]; // To store the command and its arguments
+
+                    // Loop to read arguments line-by-line
+                    for (int i = 0; i < argsCount; i++) {
+                        reader.readLine(); // Skip the length line (like $4)
+                        arguments[i] = reader.readLine(); // Actual argument
+                    }
+
+                    String command = arguments[0].toUpperCase(); // Convert to uppercase for comparison
+                    System.out.println("Command: " + command); // Debug log
+
+                    // Choose thread based on command
+                    switch (command) {
+                        case "PING":
+                            MultipleResponses pingThread = new MultipleResponses(client, arguments);
+                            pingThread.start(); // Start PING handler thread
+                            break;
+
+                        case "ECHO":
+                            Echo echoThread = new Echo(client, arguments);
+                            echoThread.start(); // Start ECHO handler thread
+                            break;
+
+                        default:
+                            // If command is unknown, send error
+                            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
+                            writer.write("-ERR unknown command\r\n");
+                            writer.flush();
+                            client.close(); // Close connection
+                    }
+                } else {
+                    // If command doesn't follow RESP format
+                    BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
+                    writer.write("-ERR invalid protocol\r\n");
+                    writer.flush();
+                    client.close(); // Close invalid connection
+                }
             }
+
+        } catch (IOException e) {
+            // Log server-side errors
+            System.out.println("Server Error: " + e.getMessage());
         }
     }
 }
