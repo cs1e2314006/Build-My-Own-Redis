@@ -1,78 +1,109 @@
 package Main;
 
+// Import necessary classes for networking and input/output operations
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
+
+    // A shared key-value store that allows multiple threads to safely read and
+    // write data at the same time.
+    private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+
     public static void main(String[] args) {
-        // Print a log that the server has started
+        // Display a message indicating that the server has started
         System.out.println("Server started at port 6379");
 
-        int port = 6379; // Port number used by Redis server
+        // Define the port number where the server will listen for connections
+        int port = 6379;
 
+        // Start a try-with-resources block that automatically closes the server socket
+        // when done
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            serverSocket.setReuseAddress(true); // Allow socket to be reused quickly after close
+            // Allow the port to be reused quickly after the server is restarted
+            serverSocket.setReuseAddress(true);
 
-            // Continuously accept new client connections
+            // Keep the server running continuously to accept client connections
             while (true) {
-                Socket client = serverSocket.accept(); // Accept a new client
+                // Wait for a client to connect; once connected, a socket is created
+                Socket client = serverSocket.accept();
                 System.out.println("Client connected.");
 
-                // Create a reader to read the first command from client
+                // Set up a reader to read input (commands) sent by the client
                 BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
-                String firstLine = reader.readLine(); // Read first line of input
 
-                // If client sends nothing, skip to next connection
+                // Read the first line from the client, which should start the RESP command
+                String firstLine = reader.readLine();
+
+                // If the client sends nothing or disconnects, close the connection and skip
                 if (firstLine == null) {
                     client.close();
                     continue;
                 }
 
-                // Check if the command follows Redis RESP format
+                // RESP (Redis Serialization Protocol) commands should start with '*'
                 if (firstLine.startsWith("*")) {
-                    int argsCount = Integer.parseInt(firstLine.substring(1)); // Number of arguments
-                    String[] arguments = new String[argsCount]; // To store the command and its arguments
+                    // Extract how many arguments the command has (e.g., "*3" means 3 parts)
+                    int argsCount = Integer.parseInt(firstLine.substring(1));
 
-                    // Loop to read arguments line-by-line
+                    // Create an array to store each part of the command (like command name, key,
+                    // value)
+                    String[] arguments = new String[argsCount];
+
+                    // Loop through each argument in RESP format:
+                    // RESP sends each value in two lines — first the length (which we ignore), then
+                    // the actual value
                     for (int i = 0; i < argsCount; i++) {
-                        reader.readLine(); // Skip the length line (like $4)
-                        arguments[i] = reader.readLine(); // Actual argument
+                        reader.readLine(); // Skip the line that gives the length (e.g., "$3")
+                        arguments[i] = reader.readLine(); // Read the actual value (e.g., "SET", "key", "value")
                     }
 
-                    String command = arguments[0].toUpperCase(); // Convert to uppercase for comparison
-                    System.out.println("Command: " + command); // Debug log
+                    // Convert the first argument (command name) to uppercase to make comparison
+                    // easier
+                    String command = arguments[0].toUpperCase();
+                    System.out.println("Command: " + command); // Print which command was received
 
-                    // Choose thread based on command
+                    // Check which command the client sent and handle it appropriately
                     switch (command) {
                         case "PING":
-                            MultipleResponses pingThread = new MultipleResponses(client, arguments);
-                            pingThread.start(); // Start PING handler thread
+                            // If command is PING, start a thread that handles pinging
+                            new MultiplePings(client, arguments).start();
                             break;
 
                         case "ECHO":
-                            Echo echoThread = new Echo(client, arguments);
-                            echoThread.start(); // Start ECHO handler thread
+                            // If command is ECHO, start a thread that echoes back the message
+                            new Echo(client, arguments).start();
+                            break;
+
+                        case "SET":
+                        case "GET":
+                            // If command is SET or GET, start a thread to read/write from the shared
+                            // key-value store
+                            new SetGetHandler(client, arguments, store).start();
                             break;
 
                         default:
-                            // If command is unknown, send error
-                            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
+                            // If the command is not recognized, send back an error message to the client
+                            BufferedWriter writer = new BufferedWriter(
+                                    new OutputStreamWriter(client.getOutputStream()));
                             writer.write("-ERR unknown command\r\n");
-                            writer.flush();
-                            client.close(); // Close connection
+                            writer.flush(); // Send the error immediately
+                            client.close(); // Close the connection
                     }
+
                 } else {
-                    // If command doesn't follow RESP format
+                    // If the message does not follow RESP format, inform the client it's invalid
                     BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
                     writer.write("-ERR invalid protocol\r\n");
                     writer.flush();
-                    client.close(); // Close invalid connection
+                    client.close(); // Close the connection because it’s not valid
                 }
             }
 
         } catch (IOException e) {
-            // Log server-side errors
+            // Catch and display any error that occurs while the server is running
             System.out.println("Server Error: " + e.getMessage());
         }
     }

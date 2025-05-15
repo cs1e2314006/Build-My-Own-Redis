@@ -3,12 +3,12 @@ package Main;
 import java.io.*;
 import java.net.Socket;
 
-public class MultipleResponses extends Thread {
+public class MultiplePings extends Thread {
     Socket clientSocket; // Client connection socket
     String[] arguments; // Arguments received from client
 
     // Constructor: assign socket and arguments
-    MultipleResponses(Socket clientSocket, String[] arguments) {
+    MultiplePings(Socket clientSocket, String[] arguments) {
         this.clientSocket = clientSocket;
         this.arguments = arguments;
     }
