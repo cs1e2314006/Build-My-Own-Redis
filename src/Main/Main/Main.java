@@ -11,7 +11,7 @@ public class Main {
     // A shared key-value store that allows multiple threads to safely read and
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-
+    private static final ConcurrentHashMap<String,Long>expiry=new ConcurrentHashMap<>();
     public static void main(String[] args) {
         // Display a message indicating that the server has started
         System.out.println("Server started at port 6379");
@@ -81,7 +81,7 @@ public class Main {
                         case "GET":
                             // If command is SET or GET, start a thread to read/write from the shared
                             // key-value store
-                            new SetGetHandler(client, arguments, store).start();
+                            new SetGetHandler(client, arguments, store,expiry).start();
                             break;
 
                         default:
