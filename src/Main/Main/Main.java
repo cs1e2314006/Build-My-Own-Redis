@@ -11,8 +11,23 @@ public class Main {
     // A shared key-value store that allows multiple threads to safely read and
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String,Long>expiry=new ConcurrentHashMap<>();
-    public static void main(String[] args) {
+    private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
+
+    // === RDB CONFIGURATION PARAMETERS (added for RDB support) ===
+    private static String dir = "/tmp"; // default directory
+    private static String dbfilename = "dump.rdb"; // default filename
+
+    public static void main(String[] args) throws Exception {
+        // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--dir") && i + 1 < args.length) {
+                dir = args[i + 1];
+            }
+            if (args[i].equals("--dbfilename") && i + 1 < args.length) {
+                dbfilename = args[i + 1];
+            }
+        }
+
         // Display a message indicating that the server has started
         System.out.println("Server started at port 6379");
 
@@ -21,10 +36,11 @@ public class Main {
 
         // Start a try-with-resources block that automatically closes the server socket
         // when done
+
+
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             // Allow the port to be reused quickly after the server is restarted
             serverSocket.setReuseAddress(true);
-
             // Keep the server running continuously to accept client connections
             while (true) {
                 // Wait for a client to connect; once connected, a socket is created
@@ -81,8 +97,42 @@ public class Main {
                         case "GET":
                             // If command is SET or GET, start a thread to read/write from the shared
                             // key-value store
-                            new SetGetHandler(client, arguments, store,expiry).start();
+                            new SetGetHandler(client, arguments, store, expiry).start();
                             break;
+
+                        // === CONFIG GET HANDLING (added for RDB support) ===
+                        case "CONFIG":
+                            // Only handle CONFIG GET for "dir" and "dbfilename"
+                            if (arguments.length == 3 && arguments[1].equalsIgnoreCase("GET")) {
+                                String param = arguments[2].toLowerCase();
+                                String value = null;
+                                if (param.equals("dir")) {
+                                    value = dir;
+                                } else if (param.equals("dbfilename")) {
+                                    value = dbfilename;
+                                }
+                                BufferedWriter writer = new BufferedWriter(
+                                        new OutputStreamWriter(client.getOutputStream()));
+                                if (value != null) {
+                                    // RESP array: *2\r\n$<len>\r\n<param>\r\n$<len>\r\n<value>\r\n
+                                    writer.write("*2\r\n");
+                                    writer.write("$" + param.length() + "\r\n" + param + "\r\n");
+                                    writer.write("$" + value.length() + "\r\n" + value + "\r\n");
+                                } else {
+                                    // If param not found, return empty array
+                                    writer.write("*0\r\n");
+                                }
+                                writer.flush();
+                                client.close();
+                            } else {
+                                BufferedWriter writer = new BufferedWriter(
+                                        new OutputStreamWriter(client.getOutputStream()));
+                                writer.write("-ERR wrong number of arguments for CONFIG GET\r\n");
+                                writer.flush();
+                                client.close();
+                            }
+                            break;
+                        // === END CONFIG GET HANDLING ===
 
                         default:
                             // If the command is not recognized, send back an error message to the client
