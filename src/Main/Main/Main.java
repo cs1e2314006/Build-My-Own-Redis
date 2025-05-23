@@ -6,6 +6,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
 
+// Import the RDBConfig class that handles directory and filename settings for RDB
+import Main.RDBConfig;
+
 public class Main {
 
     // A shared key-value store that allows multiple threads to safely read and
@@ -13,20 +16,9 @@ public class Main {
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
 
-    // === RDB CONFIGURATION PARAMETERS (added for RDB support) ===
-    private static String dir = "/tmp"; // default directory
-    private static String dbfilename = "dump.rdb"; // default filename
-
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
-        for (int i = 0; i < args.length; i++) {
-            if (args[i].equals("--dir") && i + 1 < args.length) {
-                dir = args[i + 1];
-            }
-            if (args[i].equals("--dbfilename") && i + 1 < args.length) {
-                dbfilename = args[i + 1];
-            }
-        }
+        RDBConfig.parseArguments(args); // Delegated RDB config parsing to a separate class
 
         // Display a message indicating that the server has started
         System.out.println("Server started at port 6379");
@@ -36,8 +28,6 @@ public class Main {
 
         // Start a try-with-resources block that automatically closes the server socket
         // when done
-
-
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             // Allow the port to be reused quickly after the server is restarted
             serverSocket.setReuseAddress(true);
@@ -106,11 +96,14 @@ public class Main {
                             if (arguments.length == 3 && arguments[1].equalsIgnoreCase("GET")) {
                                 String param = arguments[2].toLowerCase();
                                 String value = null;
+
+                                // Use getters from the RDBConfig class to fetch configuration values
                                 if (param.equals("dir")) {
-                                    value = dir;
+                                    value = RDBConfig.getDir();
                                 } else if (param.equals("dbfilename")) {
-                                    value = dbfilename;
+                                    value = RDBConfig.getDbfilename();
                                 }
+
                                 BufferedWriter writer = new BufferedWriter(
                                         new OutputStreamWriter(client.getOutputStream()));
                                 if (value != null) {
