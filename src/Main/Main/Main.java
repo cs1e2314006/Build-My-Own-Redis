@@ -7,7 +7,6 @@ import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
 
 // Import the RDBConfig class that handles directory and filename settings for RDB
-import Main.RDBConfig;
 
 public class Main {
 
@@ -19,6 +18,8 @@ public class Main {
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
         RDBConfig.parseArguments(args); // Delegated RDB config parsing to a separate class
+        // Load keys from RDB file into the store before starting the server
+        RDBKeyHandler.loadRdbFile(RDBConfig.getDir(), RDBConfig.getDbfilename(), store);
 
         // Display a message indicating that the server has started
         System.out.println("Server started at port 6379");
@@ -64,6 +65,7 @@ public class Main {
                     for (int i = 0; i < argsCount; i++) {
                         reader.readLine(); // Skip the line that gives the length (e.g., "$3")
                         arguments[i] = reader.readLine(); // Read the actual value (e.g., "SET", "key", "value")
+                        System.out.println("Argument " + i + ": " + arguments[i]); // Print each argument for debugging
                     }
 
                     // Convert the first argument (command name) to uppercase to make comparison
@@ -127,6 +129,22 @@ public class Main {
                             break;
                         // === END CONFIG GET HANDLING ===
 
+                        case "KEYS": {
+                            BufferedWriter writer = new BufferedWriter(
+                                    new OutputStreamWriter(client.getOutputStream()));
+                            if (arguments.length != 2 || !arguments[1].equals("*")) {
+                                System.out.println(arguments.length);
+                                writer.write("-ERR only KEYS * is supported\r\n");
+                            } else {
+                                writer.write("*" + store.size() + "\r\n");
+                                for (String key : store.keySet()) {
+                                    writer.write("$" + key.length() + "\r\n" + key + "\r\n");
+                                }
+                            }
+                            writer.flush();
+                            client.close();
+                            break;
+                        }
                         default:
                             // If the command is not recognized, send back an error message to the client
                             BufferedWriter writer = new BufferedWriter(
