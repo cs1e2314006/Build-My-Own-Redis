@@ -7,7 +7,7 @@ import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
 
 // Import the RDBConfig class that handles directory and filename settings for RDB
-
+// checked for RDB support and key loading and tested for multiple key and string values
 public class Main {
 
     // A shared key-value store that allows multiple threads to safely read and
