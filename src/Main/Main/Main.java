@@ -21,11 +21,23 @@ public class Main {
         // Load keys from RDB file into the store before starting the server
         RDBKeyHandler.loadRdbFile(RDBConfig.getDir(), RDBConfig.getDbfilename(), store);
 
+        SetGetHandler.startExpiryCleanup(store, expiry);
         // Display a message indicating that the server has started
-        System.out.println("Server started at port 6379");
+        System.out.println("Server started");
 
         // Define the port number where the server will listen for connections
         int port = 6379;
+        // Check for --port argument
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--port") && i + 1 < args.length) {
+                try {
+                    port = Integer.parseInt(args[i + 1]);
+                } catch (NumberFormatException e) {
+                    System.out.println("Invalid port number: " + args[i + 1]);
+                    return;
+                }
+            }
+        }
 
         // Start a try-with-resources block that automatically closes the server socket
         // when done
@@ -145,6 +157,7 @@ public class Main {
                             client.close();
                             break;
                         }
+
                         default:
                             // If the command is not recognized, send back an error message to the client
                             BufferedWriter writer = new BufferedWriter(
