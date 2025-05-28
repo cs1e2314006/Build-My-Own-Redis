@@ -5,6 +5,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
+import Main.ReplicaClient;
 
 // Import the RDBConfig class that handles directory and filename settings for RDB
 // checked for RDB support and key loading and tested for multiple key and string values
@@ -31,13 +32,14 @@ public class Main {
         System.out.println("Server started");
 
         // Define the port number where the server will listen for connections
-        int port = 6379;
-
+        int Masterport = 6379;
+        int slaveport = -1;
+        String MasterHost = null;
         // Check for --port argument
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 try {
-                    port = Integer.parseInt(args[i + 1]);
+                    Masterport = Integer.parseInt(args[i + 1]);
                 } catch (NumberFormatException e) {
                     System.out.println("Invalid port number: " + args[i + 1]);
                     return;
@@ -45,13 +47,26 @@ public class Main {
 
             } else if (args[i].equals("--replicaof") && i + 1 < args.length) {
                 isReplica = true;
-                i++; // to skip the next argument
-            }
-        }
+                slaveport = Masterport;// putting previously accessed port to slave port as there is replica flag
+                // present in command
+                MasterHost = args[++i];
+                try {
+                    Masterport = Integer.parseInt(args[i + 1]);
+                } catch (NumberFormatException e) {
+                    System.out.println("Invalid port number: " + args[i + 1]);
+                    return;
+                }
 
+            }
+
+        }
+        System.out.println(MasterHost + " " + Masterport + " " + slaveport);
+        if (isReplica) {
+            ReplicaClient.connectToMaster(MasterHost, Masterport, store);
+        }
         // Start a try-with-resources block that automatically closes the server socket
         // when done
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        try (ServerSocket serverSocket = new ServerSocket(Masterport)) {
             // Allow the port to be reused quickly after the server is restarted
             serverSocket.setReuseAddress(true);
             // Keep the server running continuously to accept client connections
@@ -96,7 +111,7 @@ public class Main {
                     System.out.println("Command: " + command); // Print which command was received
 
                     // Check which command the client sent and handle it appropriately
-                    System.out.println(command.equals("INFO"));
+
                     switch (command) {
                         case "PING":
                             // If command is PING, start a thread that handles pinging
@@ -176,7 +191,7 @@ public class Main {
                                 String role = isReplica ? "slave" : "master";
                                 writer.write("--Information about server--\r\n");
                                 writer.write("$" + ("role:" + role).length() + "\r\n" + "role:" + role + "\r\n");
-                                int masterlen=master_replID.length() + 13;
+                                int masterlen = master_replID.length() + 13;
                                 writer.write("$" + masterlen + "\r\n" + "master_replID:-"
                                         + master_replID + "\r\n");
                                 writer.write("$" + 19 + "\r\n" + "master_repl_offset:-" + master_repl_offset + "\r\n");
