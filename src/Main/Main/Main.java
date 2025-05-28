@@ -14,19 +14,23 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
+    // for checking replica or master
+    private static boolean isReplica = false;
 
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
         RDBConfig.parseArguments(args); // Delegated RDB config parsing to a separate class
         // Load keys from RDB file into the store before starting the server
         RDBKeyHandler.loadRdbFile(RDBConfig.getDir(), RDBConfig.getDbfilename(), store);
-
+        System.out.println(args.length);
+        
         SetGetHandler.startExpiryCleanup(store, expiry);
         // Display a message indicating that the server has started
         System.out.println("Server started");
 
         // Define the port number where the server will listen for connections
         int port = 6379;
+
         // Check for --port argument
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
@@ -36,6 +40,10 @@ public class Main {
                     System.out.println("Invalid port number: " + args[i + 1]);
                     return;
                 }
+
+            } else if (args[i].equals("--replicaof") && i + 1 < args.length) {
+                isReplica = true;
+                i++; // to skip the next argument
             }
         }
 
@@ -163,7 +171,8 @@ public class Main {
                             BufferedWriter writer = new BufferedWriter(
                                     new OutputStreamWriter(client.getOutputStream()));
                             if (arguments.length == 2 && arguments[1].equalsIgnoreCase("replication")) {
-                                writer.write("$12\r\n" + "role:master\r\n");
+                                String role = isReplica ? "slave" : "master";
+                                writer.write("$" + ("role:" + role).length() + "\r\n" + "role:" + role + "\r\n");
                             } else {
                                 writer.write("-ERR Illegal argument in INFO\r\n");
                             }
