@@ -86,6 +86,7 @@ public class Main {
                     System.out.println("Command: " + command); // Print which command was received
 
                     // Check which command the client sent and handle it appropriately
+                    System.out.println(command.equals("INFO"));
                     switch (command) {
                         case "PING":
                             // If command is PING, start a thread that handles pinging
@@ -152,6 +153,19 @@ public class Main {
                                 for (String key : store.keySet()) {
                                     writer.write("$" + key.length() + "\r\n" + key + "\r\n");
                                 }
+                            }
+                            writer.flush();
+                            client.close();
+                            break;
+                        }
+                        case "INFO": {
+
+                            BufferedWriter writer = new BufferedWriter(
+                                    new OutputStreamWriter(client.getOutputStream()));
+                            if (arguments.length == 2 && arguments[1].equalsIgnoreCase("replication")) {
+                                writer.write("$12\r\n" + "role:master\r\n");
+                            } else {
+                                writer.write("-ERR Illegal argument in INFO\r\n");
                             }
                             writer.flush();
                             client.close();
