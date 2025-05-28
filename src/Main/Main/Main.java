@@ -16,6 +16,8 @@ public class Main {
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
     // for checking replica or master
     private static boolean isReplica = false;
+    private static String master_replID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
+    private static int master_repl_offset = 0;
 
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
@@ -23,7 +25,7 @@ public class Main {
         // Load keys from RDB file into the store before starting the server
         RDBKeyHandler.loadRdbFile(RDBConfig.getDir(), RDBConfig.getDbfilename(), store);
         System.out.println(args.length);
-        
+
         SetGetHandler.startExpiryCleanup(store, expiry);
         // Display a message indicating that the server has started
         System.out.println("Server started");
@@ -172,7 +174,12 @@ public class Main {
                                     new OutputStreamWriter(client.getOutputStream()));
                             if (arguments.length == 2 && arguments[1].equalsIgnoreCase("replication")) {
                                 String role = isReplica ? "slave" : "master";
+                                writer.write("--Information about server--\r\n");
                                 writer.write("$" + ("role:" + role).length() + "\r\n" + "role:" + role + "\r\n");
+                                int masterlen=master_replID.length() + 13;
+                                writer.write("$" + masterlen + "\r\n" + "master_replID:-"
+                                        + master_replID + "\r\n");
+                                writer.write("$" + 19 + "\r\n" + "master_repl_offset:-" + master_repl_offset + "\r\n");
                             } else {
                                 writer.write("-ERR Illegal argument in INFO\r\n");
                             }
