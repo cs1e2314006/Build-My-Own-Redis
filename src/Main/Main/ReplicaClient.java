@@ -26,6 +26,10 @@ public class ReplicaClient {
                     sendCommand(Replconf2ndcommand, host, port);
                     Replconf2nd = true;
                 }
+                if (response.equals("+OK") && Replconf && Replconf2nd) {
+                    String PsyncCommand = "*3\r\n$\r\nPSYNC\r\n$1\r\n?\r\n$1\r\n-1\r\n";
+                    sendCommand(PsyncCommand, host, port);
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -54,10 +58,10 @@ public class ReplicaClient {
                     break;
                 }
                 System.out.println("Received: " + line); // Print each line of the response
-                if(!line.equals("+OK"))
-                response = reader.readLine();
+                if (!line.equals("+OK"))
+                    response = reader.readLine();
                 else
-                    response=line;
+                    response = line;
                 // Basic check to stop reading: if no more characters are ready
                 // This is a simple way to detect end of a single response.
                 if (!reader.ready()) {

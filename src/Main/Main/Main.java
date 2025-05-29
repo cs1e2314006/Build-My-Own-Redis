@@ -211,6 +211,14 @@ public class Main {
                             client.close();
                             break;
                         }
+                        case "PSYNC": {
+                            BufferedWriter writer = new BufferedWriter(
+                                    new OutputStreamWriter(client.getOutputStream()));
+                            writer.write("+FULLRESYNC" + master_replID + "\r\n");
+                            writer.flush();
+                            client.close();
+                            break;
+                        }
 
                         default:
                             // If the command is not recognized, send back an error message to the client
