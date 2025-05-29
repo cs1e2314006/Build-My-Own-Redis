@@ -214,8 +214,26 @@ public class Main {
                         case "PSYNC": {
                             BufferedWriter writer = new BufferedWriter(
                                     new OutputStreamWriter(client.getOutputStream()));
-                            writer.write("+FULLRESYNC" + master_replID + "\r\n");
+                            String fullresync = "+FULLRESYNC " + master_replID + " 0\r\n";
+                            writer.write(fullresync);
                             writer.flush();
+                            // as buffer writer is only capable of sending character,strings etc.
+                            // but when you send some thing related to byte,int or byte array then it will
+                            // corrupt your file(due to encoding like UTF-8, buffering, or line
+                            // conversions).
+                            OutputStream rawOut = client.getOutputStream();
+                            // the content of empty rdb file in hex format
+                            byte[] rdbBytes = new byte[] {
+                                    0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x30, 0x37,
+                                    (byte) 0xFA, 0x00, 0x00, 0x00, 0x00,
+                                    (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+                                    0x00, 0x00
+                            };
+
+                            String header = "$" + rdbBytes.length + "\r\n";
+                            rawOut.write(header.getBytes()); // write header
+                            rawOut.write(rdbBytes); // write binary RDB file
+                            rawOut.flush();
                             client.close();
                             break;
                         }
