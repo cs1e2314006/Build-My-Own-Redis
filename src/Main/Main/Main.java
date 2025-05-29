@@ -9,6 +9,7 @@ import Main.ReplicaClient;
 
 // Import the RDBConfig class that handles directory and filename settings for RDB
 // checked for RDB support and key loading and tested for multiple key and string values
+@SuppressWarnings("unused")
 public class Main {
 
     // A shared key-value store that allows multiple threads to safely read and
@@ -198,6 +199,14 @@ public class Main {
                             } else {
                                 writer.write("-ERR Illegal argument in INFO\r\n");
                             }
+                            writer.flush();
+                            client.close();
+                            break;
+                        }
+                        case "REPLCONF": {
+                            BufferedWriter writer = new BufferedWriter(
+                                    new OutputStreamWriter(client.getOutputStream()));
+                            writer.write("+OK\r\n");
                             writer.flush();
                             client.close();
                             break;
