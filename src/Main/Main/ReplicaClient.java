@@ -6,8 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ReplicaClient {
+    static ConcurrentHashMap<String, String> ReplicaStore;
+
     public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store) {
         new Thread(() -> {
+            ReplicaStore = store;
             try {
 
                 String PingCommand = "*1\r\n$4\r\nPING\r\n";
@@ -72,5 +75,11 @@ public class ReplicaClient {
             System.err.println("Error communicating with server: " + e.getMessage());
         }
         return response;
+    }
+
+    public static void ReplicaSetCommand(String command) {
+            for(int i=0;i<command.length();i++){
+               
+            }
     }
 }

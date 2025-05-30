@@ -20,6 +20,7 @@ public class Main {
     private static boolean isReplica = false;
     private static String master_replID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     private static int master_repl_offset = 0;
+    private static boolean isReplicaReady = false;
 
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
@@ -128,7 +129,7 @@ public class Main {
                         case "GET":
                             // If command is SET or GET, start a thread to read/write from the shared
                             // key-value store
-                            new SetGetHandler(client, arguments, store, expiry).start();
+                            new SetGetHandler(client, arguments, store, expiry,isReplicaReady).start();
                             break;
 
                         // === CONFIG GET HANDLING (added for RDB support) ===
@@ -234,6 +235,7 @@ public class Main {
                             rawOut.write(header.getBytes()); // write header
                             rawOut.write(rdbBytes); // write binary RDB file
                             rawOut.flush();
+                            isReplicaReady = true;
                             client.close();
                             break;
                         }

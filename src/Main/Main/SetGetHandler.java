@@ -3,6 +3,7 @@ package Main; // Defines the package name where this class belongs
 import java.io.*; // Import classes for input and output operations
 import java.net.Socket; // Import Socket class to handle network connections
 import java.util.concurrent.ConcurrentHashMap; // Import thread-safe hash map for storing data safely across threads
+import Main.ReplicaClient;
 
 // This class handles the SET and GET commands from clients, runs in its own thread
 public class SetGetHandler extends Thread {
@@ -10,15 +11,17 @@ public class SetGetHandler extends Thread {
     private final String[] args; // The command and arguments sent by the client, split into parts
     private final ConcurrentHashMap<String, String> store; // A thread-safe map storing key-value pairs
     private final ConcurrentHashMap<String, Long> expiry; // A map storing expiration times (in milliseconds) for keys
+    private final boolean replicaStatus;
 
     // Constructor to create a handler for a client connection with provided command
     // arguments and data maps
     public SetGetHandler(Socket client, String[] args, ConcurrentHashMap<String, String> store,
-            ConcurrentHashMap<String, Long> expiry) {
+            ConcurrentHashMap<String, Long> expiry, boolean replicaStatus) {
         this.client = client; // Store the client's socket connection
         this.args = args; // Store the command arguments
         this.store = store; // Store the reference to the shared key-value store
         this.expiry = expiry; // Store the reference to the expiry map
+        this.replicaStatus = replicaStatus;
     }
 
     // This method runs automatically when the thread starts
@@ -44,7 +47,7 @@ public class SetGetHandler extends Thread {
                     String value = args[2]; // The third argument is the value to set for the key
 
                     Long expireAt = null; // Variable to store expiration time of the key, if set (null means no
-                                          // expiration)
+                    // expiration)
                     boolean nx = false; // Flag to mark if 'NX' option is used (only set if key does not exist)
                     boolean xx = false; // Flag to mark if 'XX' option is used (only set if key already exists)
 
@@ -122,7 +125,6 @@ public class SetGetHandler extends Thread {
                                                                                // key-value (your existing comment
                                                                                // untouched)
                     }
-
                     break;
 
                 case "GET":
@@ -134,7 +136,7 @@ public class SetGetHandler extends Thread {
                         Long expireTime = expiry.get(key); // Check if key has expiry time
 
                         System.out.println(expireTime + " " + System.currentTimeMillis()); // Print expiry and current
-                                                                                           // time (debugging)
+                        // time (debugging)
 
                         // If expiry time exists and current time has passed it
                         if (expireTime != null && System.currentTimeMillis() > expireTime) {
@@ -146,10 +148,13 @@ public class SetGetHandler extends Thread {
                         // If value is found and not expired
                         if (value != null) {
                             writer.write("$" + value.length() + "\r\n" + value + "\r\n"); // Send the value as bulk
-                                                                                          // string
+                            // string
                         } else {
                             writer.write("$-1\r\n"); // Send null bulk string if key does not exist or expired
                         }
+                    }
+                    if (replicaStatus) {
+                        ReplicaClient.ReplicaSetCommand("*3\\r\\n$3\\r\\nSET\\r\\n"+"$"+args[1].length()+"\\r\\n"+args[1]+"\\r\\n"+"$"+args[2].length()+"\\r\\n"+args[2]+"\\r\\n");
                     }
                     break;
 
