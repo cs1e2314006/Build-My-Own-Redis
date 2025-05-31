@@ -4,13 +4,18 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
-
+import Main.SetGetHandler;
 public class ReplicaClient {
     static ConcurrentHashMap<String, String> ReplicaStore;
+    private static ConcurrentHashMap<String, Long> ReplicaExpiry;
 
-    public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store) {
+    public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store,
+            ConcurrentHashMap<String, Long> expiry) {
+                
         new Thread(() -> {
             ReplicaStore = store;
+            ReplicaExpiry = expiry;
+            SetGetHandler.startExpiryCleanup(ReplicaStore,ReplicaExpiry);
             try {
 
                 String PingCommand = "*1\r\n$4\r\nPING\r\n";
@@ -78,8 +83,11 @@ public class ReplicaClient {
     }
 
     public static void ReplicaSetCommand(String command) {
-            for(int i=0;i<command.length();i++){
-               
-            }
+        String[] Commands = command.split("\r\n");
+        ReplicaStore.put(Commands[4], Commands[6]);
+        if (Commands.length > 7)
+            ReplicaExpiry.put(Commands[4], Long.parseLong(Commands[8]));
+    
+
     }
 }

@@ -11,7 +11,7 @@ public class SetGetHandler extends Thread {
     private final String[] args; // The command and arguments sent by the client, split into parts
     private final ConcurrentHashMap<String, String> store; // A thread-safe map storing key-value pairs
     private final ConcurrentHashMap<String, Long> expiry; // A map storing expiration times (in milliseconds) for keys
-    private final boolean replicaStatus;
+    private final boolean replicaStatus;// keeping track of replicastatus as we have to propagate set command to replica
 
     // Constructor to create a handler for a client connection with provided command
     // arguments and data maps
@@ -31,13 +31,13 @@ public class SetGetHandler extends Thread {
             // Create a writer to send responses back to the client through the socket
 
             String command = args[0].toUpperCase(); // Extract the first word from command as uppercase (e.g. SET, GET)
-
+            System.out.println("replicastaus:- " + replicaStatus);
             switch (command) { // Decide what to do based on the command
                 case "SET":
                     // Check if at least key and value are provided after SET command
                     if (args.length < 3) {
                         writer.write("-ERR wrong number of arguments for 'SET'\r\n"); // Tell client error for too few
-                                                                                      // arguments
+                        // arguments
                         writer.flush(); // Make sure message is sent immediately
                         client.close(); // Close client connection because command is invalid
                         return; // Stop processing further to avoid errors
@@ -59,8 +59,18 @@ public class SetGetHandler extends Thread {
                             case "EX": // Expire time in seconds
                                 if (i + 1 < args.length) { // Check if next argument exists (time value)
                                     int seconds = Integer.parseInt(args[++i]); // Parse next argument as integer seconds
-                                    expireAt = System.currentTimeMillis() + seconds * 1000L; // Calculate expiry time in
-                                                                                             // future
+                                    expireAt = System.currentTimeMillis() + seconds * 1000L; /*
+                                                                                              * Calculating expiry time
+                                                                                              * i.e current time + given
+                                                                                              * expiry limit
+                                                                                              */
+
+                                    if (replicaStatus) {
+                                        ReplicaClient.ReplicaSetCommand("*4\r\n" + "$3\r\n" + "SET\r\n" + "$"
+                                                + args[1].length() + "\r\n" + args[1] + "\r\n$" + args[2].length()
+                                                + "\r\n"
+                                                + args[2] + "\r\n$" + expireAt.toString().length() + "\r\n" + expireAt);
+                                    }
                                 } else {
                                     writer.write("-ERR syntax error in EX\r\n"); // Send error if missing time value
                                     writer.flush();
@@ -73,6 +83,12 @@ public class SetGetHandler extends Thread {
                                 if (i + 1 < args.length) { // Check if next argument exists (time value)
                                     int ms = Integer.parseInt(args[++i]); // Parse next argument as integer milliseconds
                                     expireAt = System.currentTimeMillis() + ms; // Calculate expiry time in future
+                                    if (replicaStatus) {
+                                        ReplicaClient.ReplicaSetCommand("*4\r\n" + "$3\r\n" + "SET\r\n" + "$"
+                                                + args[1].length() + "\r\n" + args[1] + "\r\n$" + args[2].length()
+                                                + "\r\n"
+                                                + args[2] + "\r\n$" + expireAt.toString().length() + "\r\n" + expireAt);
+                                    }
                                 } else {
                                     writer.write("-ERR syntax error in PX\r\n"); // Send error if missing time value
                                     writer.flush();
@@ -114,7 +130,11 @@ public class SetGetHandler extends Thread {
                         writer.write("$-1\r\n"); // Respond with null bulk string indicating no operation done
                     } else {
                         store.put(key, value); // Put the key-value pair in the store
-
+                        if (replicaStatus) {
+                            
+                            ReplicaClient.ReplicaSetCommand("*3\r\n$3\r\nSET\r\n" + "$" + args[1].length() + "\r\n"
+                                    + args[1] + "\r\n" + "$" + args[2].length() + "\r\n" + args[2] + "\r\n");
+                        }
                         if (expireAt != null) {
                             expiry.put(key, expireAt); // Set the expiry time for the key
                         } else {
@@ -135,9 +155,6 @@ public class SetGetHandler extends Thread {
                         value = store.get(key); // Get value from store for that key
                         Long expireTime = expiry.get(key); // Check if key has expiry time
 
-                        System.out.println(expireTime + " " + System.currentTimeMillis()); // Print expiry and current
-                        // time (debugging)
-
                         // If expiry time exists and current time has passed it
                         if (expireTime != null && System.currentTimeMillis() > expireTime) {
                             store.remove(key); // Remove the key-value as it is expired
@@ -152,9 +169,6 @@ public class SetGetHandler extends Thread {
                         } else {
                             writer.write("$-1\r\n"); // Send null bulk string if key does not exist or expired
                         }
-                    }
-                    if (replicaStatus) {
-                        ReplicaClient.ReplicaSetCommand("*3\\r\\n$3\\r\\nSET\\r\\n"+"$"+args[1].length()+"\\r\\n"+args[1]+"\\r\\n"+"$"+args[2].length()+"\\r\\n"+args[2]+"\\r\\n");
                     }
                     break;
 

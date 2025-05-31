@@ -64,7 +64,7 @@ public class Main {
         }
         System.out.println(MasterHost + " " + Masterport + " " + slaveport);
         if (isReplica) {
-            ReplicaClient.connectToMaster(MasterHost, Masterport, store);
+            ReplicaClient.connectToMaster(MasterHost, Masterport, store, expiry);
         }
         // Start a try-with-resources block that automatically closes the server socket
         // when done
@@ -129,7 +129,7 @@ public class Main {
                         case "GET":
                             // If command is SET or GET, start a thread to read/write from the shared
                             // key-value store
-                            new SetGetHandler(client, arguments, store, expiry,isReplicaReady).start();
+                            new SetGetHandler(client, arguments, store, expiry, isReplicaReady).start();
                             break;
 
                         // === CONFIG GET HANDLING (added for RDB support) ===
