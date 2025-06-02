@@ -19,7 +19,7 @@ public class MultiplePings extends Thread {
                 // Create writer to send response to client
                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()))) {
             // If only PING is given without message, respond with +PONG
-            writer.write("Response For Ping Command\r\n");
+            // writer.write("Response For Ping Command\r\n");
             if (arguments.length == 1) {
                 writer.write("+PONG\r\n");
             } else {

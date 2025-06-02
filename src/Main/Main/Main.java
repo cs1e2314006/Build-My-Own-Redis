@@ -5,7 +5,8 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
-import Main.ReplicaClient;
+import java.util.concurrent.CopyOnWriteArrayList; // For thread-safe list of replica writers
+import java.nio.charset.StandardCharsets;
 
 // Import the RDBConfig class that handles directory and filename settings for RDB
 // checked for RDB support and key loading and tested for multiple key and string values
@@ -16,11 +17,16 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-    // for checking replica or master
-    private static boolean isReplica = false;
+
+    // for checking replica or master status of THIS server instance
+    private static boolean isMaster = true; // Default to master
+    // New: List to hold BufferedWriter for each connected replica
+    private static final CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters = new CopyOnWriteArrayList<>();
+
     private static String master_replID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     private static int master_repl_offset = 0;
-    private static boolean isReplicaReady = false;
+    public static boolean isReplicaReady = false; // Flag for a slave to know if it's ready to receive commands from its
+                                                  // master
 
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
@@ -29,149 +35,116 @@ public class Main {
         RDBKeyHandler.loadRdbFile(RDBConfig.getDir(), RDBConfig.getDbfilename(), store);
         System.out.println(args.length);
 
-        SetGetHandler.startExpiryCleanup(store, expiry);
-        // Display a message indicating that the server has started
-        System.out.println("Server started");
+        SetGetHandler.startExpiryCleanup(store, expiry); // Start background cleanup
 
-        // Define the port number where the server will listen for connections
-        int Masterport = 6379;
-        int slaveport = -1;
-        String MasterHost = null;
-        // Check for --port argument
+        System.out.println("Server starting...");
+
+        int currentServerPort = 6379; // Default port
+        String masterHost = null;
+        int masterPort = -1;
+
+        // Check for --port and --replicaof arguments
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 try {
-                    Masterport = Integer.parseInt(args[i + 1]);
+                    currentServerPort = Integer.parseInt(args[++i]);
                 } catch (NumberFormatException e) {
-                    System.out.println("Invalid port number: " + args[i + 1]);
+                    System.out.println("Invalid port number: " + args[i]);
                     return;
                 }
-
-            } else if (args[i].equals("--replicaof") && i + 1 < args.length) {
-                isReplica = true;
-                slaveport = Masterport;// putting previously accessed port to slave port as there is replica flag
-                // present in command
-                MasterHost = args[++i];
+            } else if (args[i].equals("--replicaof") && i + 2 < args.length) { // Ensure
+                // host and port are present
+                isMaster = false; // This instance is a replica (slave)
+                masterHost = args[++i];
                 try {
-                    Masterport = Integer.parseInt(args[i + 1]);
+                    masterPort = Integer.parseInt(args[++i]); // This is the master's port
                 } catch (NumberFormatException e) {
-                    System.out.println("Invalid port number: " + args[i + 1]);
+                    System.out.println("Invalid master port number: " + args[i]);
                     return;
                 }
-
             }
+        }
 
+        System.out.println("Server role: " + (isMaster ? "master" : "slave"));
+        System.out.println("Listening on port: " + currentServerPort); // Log the correct listening port
+        if (!isMaster) {
+            System.out.println("Replicating from master: " + masterHost + ":" + masterPort);
+            // Connect to master if this is a replica
+            // Ensure masterHost and masterPort are correctly passed here
+            ReplicaClient.connectToMaster(masterHost, masterPort, store, expiry);
         }
-        System.out.println(MasterHost + " " + Masterport + " " + slaveport);
-        if (isReplica) {
-            ReplicaClient.connectToMaster(MasterHost, Masterport, store, expiry);
-        }
-        // Start a try-with-resources block that automatically closes the server socket
-        // when done
-        try (ServerSocket serverSocket = new ServerSocket(Masterport)) {
-            // Allow the port to be reused quickly after the server is restarted
+
+        // FIX: The ServerSocket should bind to currentServerPort, not masterPort
+        try (ServerSocket serverSocket = new ServerSocket(masterPort)) { // Changed masterPort to masterPort
             serverSocket.setReuseAddress(true);
-            // Keep the server running continuously to accept client connections
+            System.out.println("Server started on port " + masterPort); // Log the actual bound port
+
             while (true) {
-                // Wait for a client to connect; once connected, a socket is created
                 Socket client = serverSocket.accept();
-                System.out.println("Client connected.");
+                System.out.println("Client connected: " + client.getInetAddress() + ":" + client.getPort());
 
-                // Set up a reader to read input (commands) sent by the client
+                // Create input/output streams for the client connection
                 BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
 
-                // Read the first line from the client, which should start the RESP command
                 String firstLine = reader.readLine();
 
-                // If the client sends nothing or disconnects, close the connection and skip
                 if (firstLine == null) {
                     client.close();
                     continue;
                 }
 
-                // RESP (Redis Serialization Protocol) commands should start with '*'
                 if (firstLine.startsWith("*")) {
-                    // Extract how many arguments the command has (e.g., "*3" means 3 parts)
                     int argsCount = Integer.parseInt(firstLine.substring(1));
-
-                    // Create an array to store each part of the command (like command name, key,
-                    // value)
                     String[] arguments = new String[argsCount];
 
-                    // Loop through each argument in RESP format:
-                    // RESP sends each value in two lines — first the length (which we ignore), then
-                    // the actual value
                     for (int i = 0; i < argsCount; i++) {
-                        reader.readLine(); // Skip the line that gives the length (e.g., "$3")
-                        arguments[i] = reader.readLine(); // Read the actual value (e.g., "SET", "key", "value")
-                        System.out.println("Argument " + i + ": " + arguments[i]); // Print each argument for debugging
+                        reader.readLine(); // Skip length line (e.g., "$3")
+                        arguments[i] = reader.readLine(); // Read actual value
+                        System.out.println("Argument " + i + ": " + arguments[i]);
                     }
 
-                    // Convert the first argument (command name) to uppercase to make comparison
-                    // easier
                     String command = arguments[0].toUpperCase();
-                    System.out.println("Command: " + command); // Print which command was received
-
-                    // Check which command the client sent and handle it appropriately
+                    System.out.println("Command: " + command);
 
                     switch (command) {
                         case "PING":
-                            // If command is PING, start a thread that handles pinging
                             new MultiplePings(client, arguments).start();
                             break;
-
                         case "ECHO":
-                            // If command is ECHO, start a thread that echoes back the message
                             new Echo(client, arguments).start();
                             break;
-
                         case "SET":
                         case "GET":
-                            // If command is SET or GET, start a thread to read/write from the shared
-                            // key-value store
-                            new SetGetHandler(client, arguments, store, expiry, isReplicaReady).start();
+                            // Pass the isMaster status and the list of replica writers to SetGetHandler
+                            // Only a master will use connectedReplicasWriters
+                            new SetGetHandler(client, arguments, store, expiry, isMaster, connectedReplicasWriters)
+                                    .start();
                             break;
-
-                        // === CONFIG GET HANDLING (added for RDB support) ===
                         case "CONFIG":
-                            // Only handle CONFIG GET for "dir" and "dbfilename"
                             if (arguments.length == 3 && arguments[1].equalsIgnoreCase("GET")) {
                                 String param = arguments[2].toLowerCase();
                                 String value = null;
-
-                                // Use getters from the RDBConfig class to fetch configuration values
                                 if (param.equals("dir")) {
                                     value = RDBConfig.getDir();
                                 } else if (param.equals("dbfilename")) {
                                     value = RDBConfig.getDbfilename();
                                 }
 
-                                BufferedWriter writer = new BufferedWriter(
-                                        new OutputStreamWriter(client.getOutputStream()));
                                 if (value != null) {
-                                    // RESP array: *2\r\n$<len>\r\n<param>\r\n$<len>\r\n<value>\r\n
                                     writer.write("*2\r\n");
                                     writer.write("$" + param.length() + "\r\n" + param + "\r\n");
                                     writer.write("$" + value.length() + "\r\n" + value + "\r\n");
                                 } else {
-                                    // If param not found, return empty array
                                     writer.write("*0\r\n");
                                 }
-                                writer.flush();
-                                client.close();
                             } else {
-                                BufferedWriter writer = new BufferedWriter(
-                                        new OutputStreamWriter(client.getOutputStream()));
                                 writer.write("-ERR wrong number of arguments for CONFIG GET\r\n");
-                                writer.flush();
-                                client.close();
                             }
+                            writer.flush();
+                            client.close();
                             break;
-                        // === END CONFIG GET HANDLING ===
-
                         case "KEYS": {
-                            BufferedWriter writer = new BufferedWriter(
-                                    new OutputStreamWriter(client.getOutputStream()));
                             if (arguments.length != 2 || !arguments[1].equals("*")) {
                                 System.out.println(arguments.length);
                                 writer.write("-ERR only KEYS * is supported\r\n");
@@ -186,17 +159,16 @@ public class Main {
                             break;
                         }
                         case "INFO": {
-
-                            BufferedWriter writer = new BufferedWriter(
-                                    new OutputStreamWriter(client.getOutputStream()));
                             if (arguments.length == 2 && arguments[1].equalsIgnoreCase("replication")) {
-                                String role = isReplica ? "slave" : "master";
-                                writer.write("--Information about server--\r\n");
-                                writer.write("$" + ("role:" + role).length() + "\r\n" + "role:" + role + "\r\n");
-                                int masterlen = master_replID.length() + 13;
-                                writer.write("$" + masterlen + "\r\n" + "master_replID:-"
-                                        + master_replID + "\r\n");
-                                writer.write("$" + 19 + "\r\n" + "master_repl_offset:-" + master_repl_offset + "\r\n");
+                                String role = isMaster ? "master" : "slave";
+                                String infoString = "role:" + role + "\r\n";
+                                if (isMaster) {
+                                    infoString += "master_replid:" + master_replID + "\r\n";
+                                    infoString += "master_repl_offset:" + master_repl_offset + "\r\n";
+                                }
+                                // For slave, you might add master_host, master_port, master_link_status, etc.
+
+                                writer.write("$" + infoString.length() + "\r\n" + infoString + "\r\n");
                             } else {
                                 writer.write("-ERR Illegal argument in INFO\r\n");
                             }
@@ -205,61 +177,93 @@ public class Main {
                             break;
                         }
                         case "REPLCONF": {
-                            BufferedWriter writer = new BufferedWriter(
-                                    new OutputStreamWriter(client.getOutputStream()));
+                            // If this server is a master and a client sends REPLCONF,
+                            // it's likely a new replica trying to connect.
+                            // We need to store its output stream to send commands later.
+                            // if (isMaster && arguments.length >= 3 &&
+                            // "listening-port".equalsIgnoreCase(arguments[1])) {
+                            // // A new replica is announcing itself
+                            // // The writer for this client needs to be stored.
+                            // // We are already creating a writer for every client connection at the start
+                            // of
+                            // // the loop.
+                            // // So, just add it to the list.
+                            // connectedReplicasWriters.add(writer);
+                            // System.out.println("Master: New replica connected and added to writers
+                            // list.");
+                            // }
                             writer.write("+OK\r\n");
                             writer.flush();
-                            client.close();
+                            // Do NOT close the client socket here for replicas, as master needs to send
+                            // data.
+                            // The client (replica) will close its side when it's done or on its own errors.
+                            // However, for typical Redis, the REPLCONF ACK for 'listening-port' is followed
+                            // by 'capa',
+                            // and the socket remains open. If the master closes the socket here, it breaks
+                            // replication.
+                            // We manage this by NOT closing the client socket for potential replicas.
+                            // Other commands (like PING, ECHO, GET, SET from a non-replica client) will
+                            // close.
+                            // This part needs careful handling to distinguish "regular" client from
+                            // "replica" client.
+                            // A more robust solution might involve a dedicated thread for each replica's
+                            // output.
+
+                            // For now, only close the client if it's NOT a REPLCONF command that suggests a
+                            // replica connection
+                            if (!(isMaster && arguments.length >= 3 && ("listening-port".equalsIgnoreCase(arguments[1])
+                                    || "capa".equalsIgnoreCase(arguments[1])))) {
+                                client.close(); // Close only if it's not a replication handshake step
+                            }
                             break;
                         }
                         case "PSYNC": {
-                            BufferedWriter writer = new BufferedWriter(
-                                    new OutputStreamWriter(client.getOutputStream()));
-                            String fullresync = "+FULLRESYNC " + master_replID + " 0\r\n";
-                            writer.write(fullresync);
-                            writer.flush();
-                            // as buffer writer is only capable of sending character,strings etc.
-                            // but when you send some thing related to byte,int or byte array then it will
-                            // corrupt your file(due to encoding like UTF-8, buffering, or line
-                            // conversions).
-                            OutputStream rawOut = client.getOutputStream();
-                            // the content of empty rdb file in hex format
-                            byte[] rdbBytes = new byte[] {
-                                    0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x30, 0x37,
-                                    (byte) 0xFA, 0x00, 0x00, 0x00, 0x00,
-                                    (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
-                                    0x00, 0x00
-                            };
+                            // If this server is a master, and a client sends PSYNC,
+                            // it's a replica requesting full resynchronization.
+                            if (isMaster) {
+                                String fullresync = "+FULLRESYNC " + master_replID + " 0\r\n";
+                                writer.write(fullresync);
+                                writer.flush();
 
-                            String header = "$" + rdbBytes.length + "\r\n";
-                            rawOut.write(header.getBytes()); // write header
-                            rawOut.write(rdbBytes); // write binary RDB file
-                            rawOut.flush();
-                            isReplicaReady = true;
-                            client.close();
+                                // Send the empty RDB file directly as bytes
+                                OutputStream rawOut = client.getOutputStream();
+                                byte[] rdbBytes = new byte[] {
+                                        0x52, 0x45, 0x44, 0x49, 0x53, 0x30, 0x30, 0x30, 0x37,
+                                        (byte) 0xFA, 0x00, 0x00, 0x00, 0x00,
+                                        (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
+                                        0x00, 0x00
+                                };
+                                String header = "$" + rdbBytes.length + "\r\n";
+                                rawOut.write(header.getBytes(StandardCharsets.UTF_8)); // header as bytes
+                                rawOut.write(rdbBytes); // binary RDB file
+                                rawOut.flush();
+                                System.out.println("Sent empty RDB file to replica.");
+
+                                // Do NOT close the client socket here as this socket is now dedicated to
+                                // replication
+                                // The master will use this socket's output stream to send future SET commands.
+                                // The `connectedReplicasWriters` list already contains the BufferedWriter for
+                                // this client.
+                            } else {
+                                writer.write("-ERR PSYNC command only supported on master\r\n");
+                                writer.flush();
+                                client.close();
+                            }
                             break;
                         }
-
                         default:
-                            // If the command is not recognized, send back an error message to the client
-                            BufferedWriter writer = new BufferedWriter(
-                                    new OutputStreamWriter(client.getOutputStream()));
                             writer.write("-ERR unknown command\r\n");
-                            writer.flush(); // Send the error immediately
-                            client.close(); // Close the connection
+                            writer.flush();
+                            client.close();
                     }
-
                 } else {
-                    // If the message does not follow RESP format, inform the client it's invalid
-                    BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()));
                     writer.write("-ERR invalid protocol\r\n");
                     writer.flush();
-                    client.close(); // Close the connection because it’s not valid
+                    client.close();
                 }
             }
 
         } catch (IOException e) {
-            // Catch and display any error that occurs while the server is running
             System.out.println("Server Error: " + e.getMessage());
         }
     }

@@ -1,151 +1,277 @@
-package Main; // Declares the package this class belongs to
+package Main;
 
-import java.io.*; // Imports classes for input and output operations
-import java.net.Socket; // Imports the Socket class for network communication
-import java.nio.charset.StandardCharsets; // Imports the StandardCharsets class for character encoding
-import java.util.concurrent.ConcurrentHashMap; // Imports the ConcurrentHashMap class for thread-safe data storage
+import java.io.*;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class ReplicaClient { // Defines the ReplicaClient class
+public class ReplicaClient {
+    static ConcurrentHashMap<String, String> ReplicaStore;
+    private static ConcurrentHashMap<String, Long> ReplicaExpiry;
+    private static Socket masterSocket; // Keep a reference to the master socket
 
-    static ConcurrentHashMap<String, String> ReplicaStore; // Declares a static thread-safe map to store replica data
-                                                           // (key-value pairs)
-    private static ConcurrentHashMap<String, Long> ReplicaExpiry; // Declares a static thread-safe map to store key
-                                                                  // expiration times
+    public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store,
+            ConcurrentHashMap<String, Long> expiry) {
 
-    public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store, // Defines a
-                                                                                                       // method to
-                                                                                                       // connect to the
-                                                                                                       // master server
-            ConcurrentHashMap<String, Long> expiry) { // Parameters: host, port, store, expiry
+        new Thread(() -> {
+            ReplicaStore = store;
+            ReplicaExpiry = expiry;
+            SetGetHandler.startExpiryCleanup(ReplicaStore, ReplicaExpiry); // Ensure cleanup runs
 
-        new Thread(() -> { // Creates a new thread to handle the connection to the master
-            ReplicaStore = store; // Assigns the provided store to the ReplicaStore
-            ReplicaExpiry = expiry; // Assigns the provided expiry map to the ReplicaExpiry
-            SetGetHandler.startExpiryCleanup(ReplicaStore, ReplicaExpiry); // Starts a cleanup thread to remove expired
-                                                                           // keys
-            try (Socket socket = new Socket(host, port); // Creates a socket to connect to the master
-                    BufferedReader reader = new BufferedReader( // Creates a buffered reader to read data from the
-                                                                // master
-                            new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)); // Uses UTF-8
-                                                                                                     // encoding
-                    OutputStream out = socket.getOutputStream()) { // Creates an output stream to send data to the
-                                                                   // master
+            try {
+                masterSocket = new Socket(host, port);
+                System.out.println("Connected to master: " + host + ":" + port);
 
-                boolean pingSuccess = false; // Flag to track if the PING command was successful
-                boolean replconf1Success = false; // Flag to track if the first REPLCONF command was successful
-                boolean replconf2Success = false; // Flag to track if the second REPLCONF command was successful
+                // Use BufferedWriter for sending commands
+                BufferedWriter writer = new BufferedWriter(
+                        new OutputStreamWriter(masterSocket.getOutputStream(), StandardCharsets.UTF_8));
+                // Use BufferedReader for receiving command responses
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(masterSocket.getInputStream(), StandardCharsets.UTF_8));
 
-                String PingCommand = "*1\r\n$4\r\nPING\r\n"; // Defines the PING command in RESP format
-                String response = sendCommand(PingCommand, out, reader); // Sends the PING command and receives the
-                                                                         // response
-                System.out.println("Ping Response: " + response); // Prints the PING response
-                if (response != null && response.equals("+PONG")) { // Checks if the response is "+PONG"
-                    pingSuccess = true; // Sets the pingSuccess flag to true
+                // Step 1: PING
+                String pingCommand = "*1\r\n$4\r\nPING\r\n";
+                String response = sendCommand(writer, reader, pingCommand);
+                System.out.println("PING response: " + response);
+                // Thread.sleep(100);
+
+                if (!"+PONG".equals(response)) { // Note: Removed \r\n as reader.readLine() strips it
+                    System.err.println("Unexpected PING response from master: " + response);
+                    masterSocket.close();
+                    return;
+                }
+                // Step 2: REPLCONF listening-port
+                String replConf1 = "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n";
+                response = sendCommand(writer, reader, replConf1);
+                System.out.println("REPLCONF listening-port response: " + response);
+
+                if (!"+OK".equals(response)) {
+                    System.err.println("Unexpected REPLCONF listening-port response: " + response);
+                    masterSocket.close();
+                    return;
                 }
 
-                String Replcommand = "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n6380\r\n"; // Defines the
-                                                                                                        // REPLCONF
-                                                                                                        // listening-port
-                                                                                                        // command
-                response = sendCommand(Replcommand, out, reader); // Sends the REPLCONF command and receives the
-                                                                  // response
-                System.out.println("Replconf Response: " + response); // Prints the REPLCONF response
-                if (response != null && response.equals("+OK")) { // Checks if the response is "+OK"
-                    replconf1Success = true; // Sets the replconf1Success flag to true
+                // Step 3: REPLCONF capa psync2
+                String replConf2 = "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
+                response = sendCommand(writer, reader, replConf2);
+                System.out.println("REPLCONF capa psync2 response: " + response);
+
+                if (!"+OK".equals(response)) {
+                    System.err.println("Unexpected REPLCONF capa psync2 response: " + response);
+                    masterSocket.close();
+                    return;
                 }
 
-                String Replconf2ndcommand = "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"; // Defines the
-                                                                                                      // REPLCONF capa
-                                                                                                      // command
-                response = sendCommand(Replconf2ndcommand, out, reader); // Sends the REPLCONF command and receives the
-                                                                         // response
-                System.out.println("Replconf2nd Response: " + response); // Prints the REPLCONF response
-                if (response != null && response.equals("+OK")) { // Checks if the response is "+OK"
-                    replconf2Success = true; // Sets the replconf2Success flag to true
+                // Step 4: PSYNC ? -1
+                String psyncCommand = "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n";
+                writer.write(psyncCommand); // Send PSYNC
+                writer.flush();
+                System.out.println("Sending PSYNC: " + psyncCommand.replace("\r\n", "\\r\\n"));
+
+                // Read PSYNC response line (e.g., +FULLRESYNC <replid> <offset>)
+                String psyncResponseLine = reader.readLine();
+                System.out.println("PSYNC response line: " + psyncResponseLine);
+
+                if (psyncResponseLine != null && psyncResponseLine.startsWith("+FULLRESYNC")) {
+                    System.out.println("Full resynchronization initiated.");
+                    // After +FULLRESYNC, the master sends an RDB file as a bulk string.
+                    // This *must* be read as raw bytes to avoid corruption.
+                    readRDBFile(masterSocket.getInputStream());
+                    System.out.println("RDB file consumed.");
+                    Main.isReplicaReady = true; // Mark replica as ready after RDB
+                    readMasterCommands(reader); // Start continuous command reading using the same reader
+                } else {
+                    System.err.println("Unexpected PSYNC response: " + psyncResponseLine);
+                    masterSocket.close();
                 }
 
-                if (pingSuccess && replconf1Success && replconf2Success) { // Checks if all handshake commands were
-                                                                           // successful
-                    String PsyncCommand = "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$1\r\n-1\r\n"; // Defines the PSYNC command
-                    response = sendCommand(PsyncCommand, out, reader); // Sends the PSYNC command and receives the
-                                                                       // response
-                    System.out.println("Psync Response: " + response); // Prints the PSYNC response
+            } catch (Exception e) {
+                System.err.println("Error connecting to master: " + e.getMessage());
+                e.printStackTrace();
+            } finally {
+                // The masterSocket will be closed by readMasterCommands or if an error occurs
+                // earlier.
+                // No need to close here if readMasterCommands takes over.
+                // If an error happens before readMasterCommands, ensure closure.
+                if (masterSocket != null && !masterSocket.isClosed()) {
+                    try {
+                        masterSocket.close();
+                    } catch (IOException e) {
+                        System.err.println("Error closing master socket: " + e.getMessage());
+                    }
+                }
+            }
+        }).start();
+    }
 
-                    // After handshake, start listening for commands
-                    String line; // Declares a variable to store each line received from the master
-                    while ((line = reader.readLine()) != null) { // Loops while there is data to read from the master
-                        System.out.println("Received command from master: " + line); // Prints the command received from
-                                                                                     // the master
-                        String[] commandParts = parseRespCommand(line, reader); // Parses the RESP command into parts
-                        if (commandParts != null && commandParts.length > 0) { // Checks if the command was parsed
-                                                                               // successfully
-                            String commandName = commandParts[0].toUpperCase(); // Extracts the command name and
-                                                                                // converts it to uppercase
-                            if (commandName.equals("SET")) { // Checks if the command is SET
-                                applySetCommand(commandParts); // Applies the SET command to the replica store
+    // This method sends a command and reads a single line response
+    private static String sendCommand(BufferedWriter writer, BufferedReader reader, String command) throws IOException {
+        System.out.println("Sending to master: " + command.replace("\r\n", "\\r\\n"));
+        writer.write(command);
+        writer.flush();
+        String response = reader.readLine();
+        System.out.println("send command response:-" + response);
+        return response; // Read until \r\n, stripping it
+    }
+
+    // This method *must* use InputStream directly for binary RDB data
+    private static void readRDBFile(InputStream inputStream) throws IOException {
+        // After "+FULLRESYNC <master_replid> <master_repl_offset>\r\n"
+        // The next part is a bulk string representing the RDB file.
+        // Format: "$<length>\r\n<binary_data>"
+
+        // We need to read the length part using a character reader, then the binary
+        // data.
+        // Create a temporary BufferedReader just for the length line
+        BufferedReader tempReader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+        String dollarLine = tempReader.readLine(); // Read "$<length>" line
+        if (dollarLine == null || !dollarLine.startsWith("$")) {
+            throw new IOException("Expected '$' for RDB bulk string, but got: " + dollarLine);
+        }
+
+        long rdbLength = Long.parseLong(dollarLine.substring(1));
+        System.out.println("RDB file length: " + rdbLength + " bytes. Consuming...");
+
+        // Consume the RDB binary data using the raw InputStream
+        // It's crucial to read bytes directly for binary data.
+        long bytesConsumed = 0;
+        byte[] buffer = new byte[4096];
+        while (bytesConsumed < rdbLength) {
+            int bytesToRead = (int) Math.min(buffer.length, rdbLength - bytesConsumed);
+            int read = inputStream.read(buffer, 0, bytesToRead);
+            if (read == -1) {
+                throw new IOException("Unexpected end of RDB stream.");
+            }
+            bytesConsumed += read;
+        }
+        System.out.println("Finished consuming RDB file.");
+    }
+
+    // This method continuously reads and processes commands from the master
+    private static void readMasterCommands(BufferedReader reader) {
+        new Thread(() -> {
+            try {
+                while (true) {
+                    String line = reader.readLine();
+                    if (line == null) {
+                        System.out.println("[Master closed connection]");
+                        break;
+                    }
+                    System.out.println("Received from master: " + line.replace("\r\n", "\\r\\n"));
+
+                    if (line.startsWith("*")) { // RESP Array (command)
+                        int numArgs = Integer.parseInt(line.substring(1));
+                        String[] parsedArgs = new String[numArgs];
+
+                        for (int i = 0; i < numArgs; i++) {
+                            String lenLine = reader.readLine(); // e.g., "$3"
+                            if (lenLine == null || !lenLine.startsWith("$")) {
+                                System.err.println("Invalid RESP format: Expected length line, got " + lenLine);
+                                break;
                             }
-                            // Handle other commands (DEL, etc.)
+                            // No need to parse argLength if we just read the whole line as string
+                            // int argLength = Integer.parseInt(lenLine.substring(1)); // The length is for
+                            // the string that follows
+
+                            parsedArgs[i] = reader.readLine(); // Read the actual argument value
+                        }
+
+                        if (parsedArgs.length > 0) {
+                            String commandType = parsedArgs[0].toUpperCase();
+                            if ("SET".equals(commandType)) {
+                                System.out.println("Applying SET command from master: " + Arrays.toString(parsedArgs));
+                                ReplicaSetCommand(parsedArgs);
+                            } else {
+                                System.out.println("Received unsupported command from master: " + commandType);
+                                // Potentially send an ACK or handle other master commands
+                            }
+                        }
+                    } else if (line.startsWith("+")) {
+                        // Simple string, like +OK. Master might send these for acknowledgments or other
+                        // messages.
+                        System.out.println("Master simple string: " + line);
+                    } else if (line.startsWith("$")) {
+                        // This case might occur if a bulk string is sent directly, not as part of an
+                        // array.
+                        // For replication, SET commands are usually arrays.
+                        // For simplicity, we'll assume SETs are always in arrays for now.
+                        System.out.println("Master bulk string length line: " + line);
+                        reader.readLine(); // Consume the actual bulk string value
+                    } else {
+                        System.out.println("Unknown line from master: " + line);
+                    }
+                }
+            } catch (IOException e) {
+                System.err.println("Error reading commands from master: " + e.getMessage());
+                e.printStackTrace();
+            } finally {
+                try {
+                    if (masterSocket != null && !masterSocket.isClosed()) {
+                        masterSocket.close();
+                    }
+                } catch (IOException e) {
+                    System.err.println("Error closing master socket in command reader: " + e.getMessage());
+                }
+            }
+        }).start();
+    }
+
+    public static void ReplicaSetCommand(String... args) {
+        if (args.length < 3) {
+            System.err.println("Invalid SET command received from master: " + Arrays.toString(args));
+            return;
+        }
+
+        String key = args[1];
+        String value = args[2];
+        Long expireAt = null;
+
+        // Parse optional arguments (EX, PX)
+        for (int i = 3; i < args.length; i++) {
+            String option = args[i].toUpperCase();
+            switch (option) {
+                case "EX":
+                    if (i + 1 < args.length) {
+                        try {
+                            int seconds = Integer.parseInt(args[++i]);
+                            expireAt = System.currentTimeMillis() + seconds * 1000L;
+                        } catch (NumberFormatException e) {
+                            System.err.println("Invalid EX seconds value: " + args[i]);
                         }
                     }
-                } else { // If the handshake failed
-                    System.err.println("Handshake failed. Aborting replication."); // Prints an error message
-                }
-
-            } catch (Exception e) { // Catches any exceptions that occur
-                e.printStackTrace(); // Prints the stack trace of the exception
+                    break;
+                case "PX":
+                    if (i + 1 < args.length) {
+                        try {
+                            int ms = Integer.parseInt(args[++i]);
+                            expireAt = System.currentTimeMillis() + ms;
+                        } catch (NumberFormatException e) {
+                            System.err.println("Invalid PX milliseconds value: " + args[i]);
+                        }
+                    }
+                    break;
             }
-        }).start(); // Starts the thread
-    }
-
-    private static String sendCommand(String command, OutputStream out, BufferedReader reader) throws IOException { // Defines
-                                                                                                                    // a
-                                                                                                                    // method
-                                                                                                                    // to
-                                                                                                                    // send
-                                                                                                                    // a
-                                                                                                                    // command
-                                                                                                                    // to
-                                                                                                                    // the
-                                                                                                                    // master
-        try {
-            System.out.println("Sending: " + command.replace("\r\n", "\\r\\n")); // Prints the command being sent (for
-                                                                                 // debugging)
-            out.write(command.getBytes(StandardCharsets.UTF_8)); // Sends the command as bytes using UTF-8 encoding
-            out.flush(); // Ensures all data is sent immediately
-            return reader.readLine(); // Read only one line
-        } catch (IOException e) { // Catches any IOExceptions that occur
-            System.err.println("Error communicating with server: " + e.getMessage()); // Prints an error message
-            return null;
         }
-    }
 
-    private static String[] parseRespCommand(String line, BufferedReader reader) throws IOException { // Defines a
-                                                                                                      // method to parse
-                                                                                                      // a RESP command
-        if (line.startsWith("*")) { // Checks if the line starts with "*" (RESP array indicator)
-            int numArgs = Integer.parseInt(line.substring(1)); // Extracts the number of arguments from the line
-            String[] args = new String[numArgs]; // Creates an array to store the arguments
-            for (int i = 0; i < numArgs; i++) { // Loops through each argument
-                reader.readLine(); // Skip length line // Reads and discards the line containing the length of the
-                                   // argument
-                args[i] = reader.readLine(); // Reads the argument itself
-            }
-            return args; // Returns the array of arguments
+        ReplicaStore.put(key, value);
+        if (expireAt != null) {
+            ReplicaExpiry.put(key, expireAt);
+        } else {
+            ReplicaExpiry.remove(key); // Remove any expiry if not specified
         }
-        return null; // Returns null if the line is not a RESP array
+        System.out.println("Replica applied SET: " + key + " = " + value
+                + (expireAt != null ? " (expires at " + expireAt + ")" : ""));
     }
 
-    private static void applySetCommand(String[] commandParts) { // Defines a method to apply the SET command to the
-                                                                 // replica store
-        if (commandParts.length == 3) { // Checks if the command has the correct number of arguments
-            String key = commandParts[1]; // Extracts the key from the command parts
-            String value = commandParts[2]; // Extracts the value from the command parts
-            ReplicaStore.put(key, value); // Puts the key-value pair into the replica store
-            System.out.println("Replica: SET " + key + " " + value); // Prints a message indicating the SET command was
-                                                                     // applied
-        } else { // If the command has the wrong number of arguments
-            System.err.println("Replica: Invalid SET command format"); // Prints an error message
+    // Helper to encode commands into RESP format (can be moved to a utility class)
+    public static String encodeRESPCommand(String... args) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("*").append(args.length).append("\r\n");
+        for (String arg : args) {
+            sb.append("$").append(arg.length()).append("\r\n");
+            sb.append(arg).append("\r\n");
         }
+        return sb.toString();
     }
-
 }
