@@ -1,230 +1,221 @@
 package Main;
 
-import java.io.*;
-import java.net.Socket;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter; // Needed for cleanup thread, if it writes logs
+import java.util.Iterator; // For safe removal during iteration
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList; // For thread-safe list of replica writers
+import java.util.concurrent.CopyOnWriteArrayList;
 
-// This class handles the SET and GET commands from clients, runs in its own thread
-public class SetGetHandler extends Thread {
-    private final Socket client;
-    private final String[] args;
-    private final ConcurrentHashMap<String, String> store;
-    private final ConcurrentHashMap<String, Long> expiry;
-    private final boolean isMaster; // Indicates if this server instance is a master
-    // New: List of replica output streams for propagation
-    private final CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters;
+// This class handles the SET and GET commands, now as a static helper.
+// It does NOT manage the client socket lifecycle.
+public class SetGetHandler {
 
-    // Constructor to create a handler for a client connection with provided command
-    // arguments, data maps, and master status, and replica writers
-    public SetGetHandler(Socket client, String[] args, ConcurrentHashMap<String, String> store,
-            ConcurrentHashMap<String, Long> expiry, boolean isMaster,
-            CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters) {
-        this.client = client;
-        this.args = args;
-        this.store = store;
-        this.expiry = expiry;
-        this.isMaster = isMaster; // Set the master status
-        this.connectedReplicasWriters = connectedReplicasWriters; // Store the list of replica writers
-    }
+    // Handles a single SET or GET command for a connected client.
+    // It takes the BufferedWriter for the client's output stream directly.
+    public static void handleCommand(
+            String[] args, // The command arguments from the client
+            ConcurrentHashMap<String, String> store,
+            ConcurrentHashMap<String, Long> expiry,
+            boolean isMaster, // Indicates if this server instance is a master
+            CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters, // List of replica output streams
+            BufferedWriter clientWriter // The writer connected to the current client
+    ) throws IOException { // Throws IOException, letting ClientHandler handle it
+        String command = args[0].toUpperCase();
+        System.out.println("isMaster status for command '" + command + "': " + isMaster);
 
-    @Override
-    public void run() {
-        try (BufferedWriter clientWriter = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()))) {
-            String command = args[0].toUpperCase();
-            System.out.println("isMaster status for command '" + command + "': " + isMaster);
+        switch (command) {
+            case "SET":
+                if (args.length < 3) {
+                    clientWriter.write("-ERR wrong number of arguments for 'SET'\r\n");
+                    clientWriter.flush();
+                    return;
+                }
 
-            switch (command) {
-                case "SET":
-                    if (args.length < 3) {
-                        clientWriter.write("-ERR wrong number of arguments for 'SET'\r\n");
-                        clientWriter.flush();
-                        client.close();
-                        return;
-                    }
+                String key = args[1];
+                String value = args[2];
+                Long expireAt = null;
+                boolean nx = false;
+                boolean xx = false;
 
-                    String key = args[1];
-                    String value = args[2];
-                    Long expireAt = null;
-                    boolean nx = false;
-                    boolean xx = false;
-
-                    for (int i = 3; i < args.length; i++) {
-                        String option = args[i].toUpperCase();
-                        switch (option) {
-                            case "EX":
-                                if (i + 1 < args.length) {
-                                    try {
-                                        int seconds = Integer.parseInt(args[++i]);
-                                        expireAt = System.currentTimeMillis() + seconds * 1000L;
-                                    } catch (NumberFormatException e) {
-                                        clientWriter.write("-ERR value is not an integer or out of range\r\n");
-                                        clientWriter.flush();
-                                        client.close();
-                                        return;
-                                    }
-                                } else {
-                                    clientWriter.write("-ERR syntax error\r\n");
+                for (int i = 3; i < args.length; i++) {
+                    String option = args[i].toUpperCase();
+                    switch (option) {
+                        case "EX":
+                            if (i + 1 < args.length) {
+                                try {
+                                    int seconds = Integer.parseInt(args[++i]);
+                                    expireAt = System.currentTimeMillis() + seconds * 1000L;
+                                } catch (NumberFormatException e) {
+                                    clientWriter.write("-ERR value is not an integer or out of range\r\n");
                                     clientWriter.flush();
-                                    client.close();
                                     return;
                                 }
-                                break;
-                            case "PX":
-                                if (i + 1 < args.length) {
-                                    try {
-                                        int ms = Integer.parseInt(args[++i]);
-                                        expireAt = System.currentTimeMillis() + ms;
-                                    } catch (NumberFormatException e) {
-                                        clientWriter.write("-ERR value is not an integer or out of range\r\n");
-                                        clientWriter.flush();
-                                        client.close();
-                                        return;
-                                    }
-                                } else {
-                                    clientWriter.write("-ERR syntax error\r\n");
-                                    clientWriter.flush();
-                                    client.close();
-                                    return;
-                                }
-                                break;
-                            case "NX":
-                                nx = true;
-                                break;
-                            case "XX":
-                                xx = true;
-                                break;
-                            default:
-                                clientWriter.write("-ERR unknown option for SET\r\n");
+                            } else {
+                                clientWriter.write("-ERR syntax error\r\n");
                                 clientWriter.flush();
-                                client.close();
                                 return;
-                        }
+                            }
+                            break;
+                        case "PX":
+                            if (i + 1 < args.length) {
+                                try {
+                                    int ms = Integer.parseInt(args[++i]);
+                                    expireAt = System.currentTimeMillis() + ms;
+                                } catch (NumberFormatException e) {
+                                    clientWriter.write("-ERR value is not an integer or out of range\r\n");
+                                    clientWriter.flush();
+                                    return;
+                                }
+                            } else {
+                                clientWriter.write("-ERR syntax error\r\n");
+                                clientWriter.flush();
+                                return;
+                            }
+                            break;
+                        case "NX":
+                            nx = true;
+                            break;
+                        case "XX":
+                            xx = true;
+                            break;
+                        default:
+                            clientWriter.write("-ERR unknown option for SET\r\n");
+                            clientWriter.flush();
+                            return;
                     }
+                }
 
-                    if (nx && xx) {
-                        clientWriter.write("-ERR NX and XX options at the same time are not allowed\r\n");
-                        clientWriter.flush();
-                        client.close();
-                        return;
-                    }
+                if (nx && xx) {
+                    clientWriter.write("-ERR NX and XX options at the same time are not allowed\r\n");
+                    clientWriter.flush();
+                    return;
+                }
 
-                    boolean keyExists = store.containsKey(key);
-                    boolean performedSet = false;
+                boolean keyExists = store.containsKey(key);
+                boolean performedSet = false;
 
-                    if ((nx && keyExists) || (xx && !keyExists)) {
-                        clientWriter.write("$-1\r\n"); // Respond with null bulk string indicating no operation done
+                if ((nx && keyExists) || (xx && !keyExists)) {
+                    clientWriter.write("$-1\r\n"); // Respond with null bulk string indicating no operation done
+                } else {
+                    store.put(key, value);
+                    if (expireAt != null) {
+                        expiry.put(key, expireAt);
+                        System.out.println("Set key: " + key + ", value: " + value + ", expires in "
+                                + (expireAt - System.currentTimeMillis()) + "ms");
                     } else {
-                        store.put(key, value);
-                        if (expireAt != null) {
-                            expiry.put(key, expireAt);
-                        } else {
-                            expiry.remove(key);
-                        }
-                        clientWriter.write("+OK\r\n"); // Send success message
-                        performedSet = true;
+                        expiry.remove(key); // Ensure no old expiry is left
+                        System.out.println("Set key: " + key + ", value: " + value);
+                    }
+                    clientWriter.write("+OK\r\n"); // Send success message
+                    performedSet = true;
+                }
+
+                // *** REPLICATION LOGIC FOR MASTER ***
+                if (!isMaster && performedSet) {
+                    // Construct the RESP command to send to replicas
+                    String replicaCommand;
+                    System.out.println("inside this block");
+                    // For propagation, always send the full original command including options
+                    StringBuilder replicaCmdBuilder = new StringBuilder();
+                    replicaCmdBuilder.append("*").append(args.length).append("\r\n");
+                    for (String arg : args) {
+                        replicaCmdBuilder.append("$").append(arg.length()).append("\r\n").append(arg).append("\r\n");
+                    }
+                    replicaCommand = replicaCmdBuilder.toString();
+                    propagateCommandToReplicas(replicaCommand, connectedReplicasWriters);
+                }
+                break;
+
+            case "GET":
+                if (args.length != 2) {
+                    clientWriter.write("-ERR wrong number of arguments for 'GET'\r\n");
+                } else {
+                    key = args[1];
+                    value = store.get(key);
+                    Long expireTime = expiry.get(key);
+
+                    if (expireTime != null && System.currentTimeMillis() > expireTime) {
+                        store.remove(key);
+                        expiry.remove(key);
+                        value = null; // Mark as expired
                     }
 
-                    // *** REPLICATION LOGIC FOR MASTER ***
-                    if (isMaster && performedSet) {
-                        // Construct the RESP command to send to replicas
-                        String replicaCommand;
-                        if (expireAt != null) {
-                            // Include EX or PX based on original command's type. For simplicity, we just
-                            // use PX for all
-                            // propagated expiry, converting EX seconds to milliseconds.
-                            long originalExpiryMs = expireAt; // Already calculated in milliseconds
-                            replicaCommand = ReplicaClient.encodeRESPCommand("SET", key, value, "PX",
-                                    String.valueOf(originalExpiryMs - System.currentTimeMillis()));
-                        } else {
-                            replicaCommand = ReplicaClient.encodeRESPCommand("SET", key, value);
-                        }
-                        propagateCommandToReplicas(replicaCommand);
-                    }
-                    break;
-
-                case "GET":
-                    if (args.length != 2) {
-                        clientWriter.write("-ERR wrong number of arguments for 'GET'\r\n");
+                    if (value != null) {
+                        clientWriter.write("$" + value.length() + "\r\n" + value + "\r\n");
                     } else {
-                        key = args[1];
-                        value = store.get(key);
-                        Long expireTime = expiry.get(key);
-
-                        if (expireTime != null && System.currentTimeMillis() > expireTime) {
-                            store.remove(key);
-                            expiry.remove(key);
-                            value = null;
-                        }
-
-                        if (value != null) {
-                            clientWriter.write("$" + value.length() + "\r\n" + value + "\r\n");
-                        } else {
-                            clientWriter.write("$-1\r\n");
-                        }
+                        clientWriter.write("$-1\r\n");
                     }
-                    break;
+                }
+                break;
 
-                default:
-                    clientWriter.write("-ERR unknown command\r\n");
-            }
-
-            clientWriter.flush();
-            client.close();
-
-        } catch (IOException e) {
-            System.out.println("Handler error: " + e.getMessage());
+            default:
+                // This case should ideally not be reached if commands are filtered in
+                // ClientHandler
+                clientWriter.write("-ERR unknown command\r\n");
         }
+        clientWriter.flush(); // Always flush after sending a response
     }
 
-    // New: Method to propagate commands to all connected replicas
-    private void propagateCommandToReplicas(String command) {
-        // Use an iterator to safely remove disconnected replicas
-        connectedReplicasWriters.forEach(writer -> {
-            try {
-                System.out.println("Propagating to replica: " + command.replace("\r\n", "\\r\\n"));
-                writer.write(command);
-                writer.flush();
-            } catch (IOException e) {
-                System.err.println("Error propagating command to replica: " + e.getMessage() + ". Removing writer.");
-                // Remove the disconnected writer
-                // Note: Removing within forEach might lead to ConcurrentModificationException
-                // CopyOnWriteArrayList handles this gracefully, but iterating with an explicit
-                // Iterator and `remove()` is often safer for other list types.
-                // For CopyOnWriteArrayList, it's safe to modify during iteration, but the
-                // element
-                // might still be processed in the current iteration.
-                // A more robust approach would be to add to a "to-remove" list and clean up
-                // after the loop.
-            }
-        });
-        // A more robust cleanup could be done here if needed, or periodically in Main.
-        // For simplicity with CopyOnWriteArrayList, we let failed writes indicate
-        // removal.
-    }
-
+    // This method starts a background thread to clean up expired keys.
+    // It should be called once from Main.
     public static void startExpiryCleanup(ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry) {
         Thread cleanupThread = new Thread(() -> {
             while (true) {
                 try {
-                    Thread.sleep(60000);
+                    // Check more frequently than 60 seconds for better responsiveness
+                    Thread.sleep(100); // Check every 100 milliseconds
+
                     long now = System.currentTimeMillis();
 
-                    for (String key : expiry.keySet()) {
+                    // Using an iterator to safely remove elements during iteration
+                    Iterator<String> keyIterator = expiry.keySet().iterator();
+                    while (keyIterator.hasNext()) {
+                        String key = keyIterator.next();
                         Long exp = expiry.get(key);
                         if (exp != null && now > exp) {
                             store.remove(key);
-                            expiry.remove(key);
+                            keyIterator.remove(); // Safely remove from expiry map
+                            System.out.println("Expired key removed by cleanup: " + key);
                         }
                     }
                 } catch (InterruptedException e) {
-                    break;
+                    System.err.println("Expiry cleanup thread interrupted: " + e.getMessage());
+                    break; // Exit the loop if thread is interrupted
+                } catch (Exception e) {
+                    System.err.println("Error in expiry cleanup thread: " + e.getMessage());
                 }
             }
         });
 
-        cleanupThread.setDaemon(true);
+        cleanupThread.setDaemon(true); // Allow JVM to exit if only daemon threads remain
+        cleanupThread.setName("ExpiryCleanupThread");
         cleanupThread.start();
+    }
+
+    // Method to propagate commands to all connected replicas
+    // It is static because it's called from a static context (handleCommand)
+    private static void propagateCommandToReplicas(String command, CopyOnWriteArrayList<BufferedWriter> replicas) {
+        System.out.println("Propagating to replica: " + command.replace("\r\n", "\\r\\n").trim());
+
+        // Use a standard for-each loop and remove directly from the list if there's an
+        // error.
+        // CopyOnWriteArrayList ensures thread-safety for iteration and modification.
+        for (BufferedWriter writer : replicas) {
+            try {
+                writer.write(command);
+                writer.flush();
+                System.out.println("Successfully propagated command to a replica.");
+            } catch (IOException e) {
+                System.err.println("Error propagating command to replica. Removing writer: " + e.getMessage());
+                // Remove the disconnected writer directly from the CopyOnWriteArrayList.
+                // This is safe and won't cause ConcurrentModificationException.
+                // The current iteration might still process other elements based on the
+                // list's state at the beginning of the iteration, but subsequent iterations
+                // will reflect the change.
+                replicas.remove(writer);
+            }
+        }
     }
 }
