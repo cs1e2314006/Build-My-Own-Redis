@@ -2,7 +2,6 @@ package Main;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter; // Needed for cleanup thread, if it writes logs
 import java.util.Iterator; // For safe removal during iteration
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;

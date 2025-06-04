@@ -267,6 +267,11 @@ public class ClientHandler extends Thread {
                             connectedReplicasWriters.add(writer);
                             System.out.println("Master: New replica connected and added to writers list for port: "
                                     + arguments[2]);
+                        } else if (!isMaster && arguments.length >= 3 && "getack".equalsIgnoreCase(arguments[1])) {
+                            System.out.println("sending reply for ack cmd");
+                            writer.write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n");
+                            writer.flush();
+                            break;
                         }
                         writer.write("+OK\r\n"); // Always respond with OK for REPLCONF.
                         writer.flush();
