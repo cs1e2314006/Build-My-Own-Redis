@@ -269,7 +269,9 @@ public class ClientHandler extends Thread {
                                     + arguments[2]);
                         } else if (!isMaster && arguments.length >= 3 && "getack".equalsIgnoreCase(arguments[1])) {
                             System.out.println("sending reply for ack cmd");
-                            writer.write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n");
+                            writer.write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n" + "$"
+                                    + ReplicaClient.offset.toString().length() + "\r\n" + ReplicaClient.offset
+                                    + "\r\n");
                             writer.flush();
                             break;
                         }

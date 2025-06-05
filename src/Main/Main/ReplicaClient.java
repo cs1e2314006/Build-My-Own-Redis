@@ -10,6 +10,7 @@ public class ReplicaClient {
     static ConcurrentHashMap<String, String> ReplicaStore;
     private static ConcurrentHashMap<String, Long> ReplicaExpiry;
     private static Socket masterSocket; // Keep a reference to the master socket
+    public static Integer offset = 0;
 
     public static void connectToMaster(String host, int port, ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry) {
@@ -175,6 +176,8 @@ public class ReplicaClient {
                             // the string that follows
 
                             parsedArgs[i] = reader.readLine(); // Read the actual argument value
+                            offset += parsedArgs[i].getBytes().length + 2;
+                            System.out.println("value of offset :-" + offset);
                         }
 
                         if (parsedArgs.length > 0) {
