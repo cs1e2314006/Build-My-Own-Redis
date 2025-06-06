@@ -15,8 +15,8 @@
       "name": "Main",
       "request": "launch",
       "mainClass": "Main.Main",
-      "projectName": "RedisClone_4d91157a",
-      "args": "--port 6380 --replicaof localhost 6379"
+      "projectName": "RedisClone_4d91157a"
+      // "args": "--port 6380 --replicaof localhost 6379"
     }
   ]
 }

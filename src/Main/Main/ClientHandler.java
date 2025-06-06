@@ -312,6 +312,10 @@ public class ClientHandler extends Thread {
                         }
                         break;
                     }
+                    case "WAIT":{
+                        writer.write("$1\r\n0\r\n");
+                        writer.flush();
+                    }
                     default:
                         // Handles unknown commands.
                         writer.write("-ERR unknown command '" + command + "'\r\n");

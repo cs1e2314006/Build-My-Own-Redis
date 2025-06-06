@@ -74,7 +74,7 @@ public class Main {
         }
 
         // FIX: The ServerSocket should bind to currentServerPort, not masterPort
-        try (ServerSocket serverSocket = new ServerSocket(masterPort)) { // CORRECTED to currentServerPort
+        try (ServerSocket serverSocket = new ServerSocket(currentServerPort)) { // CORRECTED to currentServerPort
             serverSocket.setReuseAddress(true);
             System.out.println("Server started on port " + masterPort); // Log the actual bound port
 
