@@ -26,6 +26,11 @@ public class Main {
     private static int master_repl_offset = 0;
     public static boolean isReplicaReady = false; // Flag for a slave to know if it's ready to receive commands from its
                                                   // master
+    private static int countofReplica = 0;
+
+    public static int getreplicacount() {
+        return countofReplica;
+    }
 
     public static void main(String[] args) throws Exception {
         // === PARSE RDB CONFIGURATION FROM COMMAND LINE (added for RDB support) ===
@@ -71,10 +76,11 @@ public class Main {
             // Connect to master if this is a replica
             // Ensure masterHost and masterPort are correctly passed here
             ReplicaClient.connectToMaster(masterHost, masterPort, store, expiry);
+            countofReplica += 1;
         }
 
         // FIX: The ServerSocket should bind to currentServerPort, not masterPort
-        try (ServerSocket serverSocket = new ServerSocket(currentServerPort)) { // CORRECTED to currentServerPort
+        try (ServerSocket serverSocket = new ServerSocket(masterPort)) { // CORRECTED to currentServerPort
             serverSocket.setReuseAddress(true);
             System.out.println("Server started on port " + masterPort); // Log the actual bound port
 

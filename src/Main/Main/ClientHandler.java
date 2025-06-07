@@ -312,8 +312,8 @@ public class ClientHandler extends Thread {
                         }
                         break;
                     }
-                    case "WAIT":{
-                        writer.write("$1\r\n0\r\n");
+                    case "WAIT": {
+                        writer.write(":" + Main.getreplicacount() + "\r\n");
                         writer.flush();
                     }
                     default:
