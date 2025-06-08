@@ -263,7 +263,7 @@ public class ClientHandler extends Thread {
                         // replication.
                         // If this server is a master and the replica sends "listening-port", add its
                         // writer to the list.
-                        if (isMaster && arguments.length >= 3 && "listening-port".equalsIgnoreCase(arguments[1])) {
+                        if (!isMaster && arguments.length >= 3 && "listening-port".equalsIgnoreCase(arguments[1])) {
                             connectedReplicasWriters.add(writer);
                             System.out.println("Master: New replica connected and added to writers list for port: "
                                     + arguments[2]);
@@ -315,6 +315,17 @@ public class ClientHandler extends Thread {
                     case "WAIT": {
                         writer.write(":" + Main.getreplicacount() + "\r\n");
                         writer.flush();
+                        break;
+                    }
+                    case "TYPE": {
+                        String key = arguments[1];
+                        System.out.println(key + "" + store.contains(key));
+                        if (store.contains(key))
+                            writer.write("+String\r\n");
+                        else
+                            writer.write("+none\r\n");
+                        writer.flush();
+                        break;
                     }
                     default:
                         // Handles unknown commands.
