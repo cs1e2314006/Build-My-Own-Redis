@@ -16,7 +16,7 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-
+    private static final ConcurrentHashMap<String, String> streams = new ConcurrentHashMap<>();
     // for checking replica or master status of THIS server instance
     private static boolean isMaster = true; // Default to master
     // New: List to hold BufferedWriter for each connected replica
@@ -78,7 +78,7 @@ public class Main {
             ReplicaClient.connectToMaster(masterHost, masterPort, store, expiry);
             countofReplica += 1;
         }
-
+        masterPort = masterPort == -1 ? currentServerPort : masterPort;
         // FIX: The ServerSocket should bind to currentServerPort, not masterPort
         try (ServerSocket serverSocket = new ServerSocket(masterPort)) { // CORRECTED to currentServerPort
             serverSocket.setReuseAddress(true);
@@ -93,6 +93,7 @@ public class Main {
                         clientSocket,
                         store,
                         expiry,
+                        streams,
                         isMaster,
                         connectedReplicasWriters,
                         master_replID,

@@ -19,6 +19,8 @@ public class ClientHandler extends Thread {
     private ConcurrentHashMap<String, String> store;
     // A thread-safe hash map to store expiration timestamps for keys in the store.
     private ConcurrentHashMap<String, Long> expiry;
+    // A thread-safe hash map to store streams
+    private ConcurrentHashMap<String, String> streams;
     // A boolean indicating whether this server instance is a master.
     private boolean isMaster;
     // A thread-safe list of BufferedWriter objects for all connected replicas.
@@ -45,6 +47,7 @@ public class ClientHandler extends Thread {
             Socket clientSocket,
             ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry,
+            ConcurrentHashMap<String, String> streams,
             boolean isMaster,
             CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters,
             String master_replID,
@@ -52,6 +55,7 @@ public class ClientHandler extends Thread {
         this.clientSocket = clientSocket;
         this.store = store;
         this.expiry = expiry;
+        this.streams = streams;
         this.isMaster = isMaster;
         this.connectedReplicasWriters = connectedReplicasWriters;
         this.master_replID = master_replID;
@@ -317,12 +321,23 @@ public class ClientHandler extends Thread {
                         writer.flush();
                         break;
                     }
+                    case "XADD": {
+                        for (int i = 1; i < argsCount; i += 2) {
+                            streams.put(arguments[i], arguments[i + 1]);
+                        }
+                        writer.write("+OK\r\n");
+                        System.out.println(streams);
+                        writer.flush();
+                        break;
+                    }
                     case "TYPE": {
                         String key = arguments[1];
-                        System.out.println(key + "" + store.contains(key));
-                        if (store.contains(key))
+                        System.out.println(key + " " + store.containsKey(key));
+                        if (store.containsKey(key))
                             writer.write("+String\r\n");
-                        else
+                        else if (streams.containsKey(key)) {
+                            writer.write("+stream\r\n");
+                        } else
                             writer.write("+none\r\n");
                         writer.flush();
                         break;
