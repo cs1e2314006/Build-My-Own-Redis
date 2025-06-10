@@ -20,7 +20,7 @@ public class ClientHandler extends Thread {
     // A thread-safe hash map to store expiration timestamps for keys in the store.
     private ConcurrentHashMap<String, Long> expiry;
     // A thread-safe hash map to store streams
-    private ConcurrentHashMap<String, String> streams;
+    private ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams;
     // A boolean indicating whether this server instance is a master.
     private boolean isMaster;
     // A thread-safe list of BufferedWriter objects for all connected replicas.
@@ -30,6 +30,7 @@ public class ClientHandler extends Thread {
     private String master_replID;
     // The replication offset of the master server. Used in replication handshakes.
     private int master_repl_offset;
+    private String id = "0-0";
 
     /**
      * Constructor for ClientHandler.
@@ -47,7 +48,7 @@ public class ClientHandler extends Thread {
             Socket clientSocket,
             ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry,
-            ConcurrentHashMap<String, String> streams,
+            ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams,
             boolean isMaster,
             CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters,
             String master_replID,
@@ -322,11 +323,51 @@ public class ClientHandler extends Thread {
                         break;
                     }
                     case "XADD": {
-                        for (int i = 1; i < argsCount; i += 2) {
-                            streams.put(arguments[i], arguments[i + 1]);
+                        if (arguments.length < 4) {
+                            writer.write("-ERR wrong number of arguments for 'XADD' command\r\n");
+                            writer.flush();
+                            break;
                         }
+
+                        String streamKey = arguments[1]; // The stream key
+                        String id = arguments[2]; // The ID (e.g., "*")
+                        String[] idparts = id.split("-");
+                        String[] previouids = this.id.split("-");
+                        int first = Integer.parseInt(idparts[0]);
+                        int second = Integer.parseInt(idparts[1]);
+                        int prefirst = Integer.parseInt(previouids[1]);
+                        int presecond = Integer.parseInt(previouids[1]);
+                        if (first == 0 && second == 0) {
+                            writer.write("-ERR The ID specified in XADD must be greater than 0-0");
+                            writer.flush();
+                            break;
+                        } else if (first <= prefirst && second <= presecond) {
+                            writer.write(
+                                    "-ERR The ID specified in XADD is equal or smaller than the target stream top item");
+                            writer.flush();
+                            break;
+                        } else {
+                            this.id = id;
+                            System.out.println("correct id");
+                        }
+                        // Collect field-value pairs into a map
+                        ConcurrentHashMap<String, String> streamData = new ConcurrentHashMap<>();
+                        for (int i = 3; i < arguments.length; i += 2) {
+                            if (i + 1 >= arguments.length) {
+                                writer.write("-ERR wrong number of arguments for 'XADD' command\r\n");
+                                writer.flush();
+                                return;
+                            }
+                            String field = arguments[i];
+                            String value = arguments[i + 1];
+                            streamData.put(field, value);
+                        }
+
+                        // Store the stream data in the streams map
+                        streams.put(streamKey, streamData);
+
+                        System.out.println("Added stream: " + streamKey + " with data: " + streamData);
                         writer.write("+OK\r\n");
-                        System.out.println(streams);
                         writer.flush();
                         break;
                     }

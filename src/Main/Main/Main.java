@@ -16,7 +16,7 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, String> streams = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams = new ConcurrentHashMap<>();
     // for checking replica or master status of THIS server instance
     private static boolean isMaster = true; // Default to master
     // New: List to hold BufferedWriter for each connected replica
