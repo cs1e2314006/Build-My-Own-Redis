@@ -326,7 +326,7 @@ public class ClientHandler extends Thread {
                     }
                     case "XADD": {
                         if (arguments.length < 4) { // Check for minimum arguments and odd
-                                                    // number of field-value pairs
+                            // number of field-value pairs
                             writer.write("-ERR wrong number of arguments for 'XADD' command\r\n");
                             writer.flush();
                             break;
@@ -335,61 +335,90 @@ public class ClientHandler extends Thread {
                         String streamKey = arguments[1]; // The stream key
                         String newIdString = arguments[2]; // The ID (e.g., "1526919030474-0")
 
+                        String genereatedId = "";
                         // Parse the new ID
                         String[] newIdParts = newIdString.split("-");
                         long newMillisecondsTime;
                         int newSequenceNumber;
+                        if (newIdParts[1].equals("*")) {
 
-                        try {
-                            newMillisecondsTime = Long.parseLong(newIdParts[0]);
-                            newSequenceNumber = Integer.parseInt(newIdParts[1]);
-                        } catch (NumberFormatException e) {
-                            writer.write("-ERR Invalid ID format\r\n"); // Handle cases where ID parts are not numbers
+                            String lastIdString = lastStreamIds.getOrDefault(streamKey, "0-0");
+                            String[] lastIdParts = lastIdString.split("-");
+                            long lastMillisecondsTime;
+                            int lastSequenceNumber;
+
+                            try {
+                                lastMillisecondsTime = Long.parseLong(lastIdParts[0]);
+                                lastSequenceNumber = Integer.parseInt(lastIdParts[1]);
+                            } catch (NumberFormatException e) {
+                                // This should ideally not happen if lastStreamIds are always valid
+                                // but good for robustness.
+                                writer.write("-ERR Internal server error with last ID format\r\n");
+                                writer.flush();
+                                break;
+                            }
+                            if (Long.parseLong(newIdParts[0]) == lastMillisecondsTime) {
+                                genereatedId = newIdParts[0] + "-" + (lastSequenceNumber + 1);
+                                writer.write("$" + genereatedId.length() + "\r\n" + genereatedId + "\r\n");
+                            } else {
+                                genereatedId = newIdParts[0] + "-" + "0\r\n";
+                                writer.write("$" + genereatedId.length() + "\r\n" + genereatedId + "\r\n");
+                            }
+                            System.out.println(genereatedId);
+
                             writer.flush();
-                            break;
-                        }
+                        } else {
+                            try {
+                                newMillisecondsTime = Long.parseLong(newIdParts[0]);
+                                newSequenceNumber = Integer.parseInt(newIdParts[1]);
+                            } catch (NumberFormatException e) {
+                                writer.write("-ERR Invalid ID format\r\n"); // Handle cases where ID parts are not
+                                                                            // numbers
+                                writer.flush();
+                                break;
+                            }
 
-                        // Get the last ID for this specific stream
-                        String lastIdString = lastStreamIds.getOrDefault(streamKey, "0-0");
-                        String[] lastIdParts = lastIdString.split("-");
-                        long lastMillisecondsTime;
-                        int lastSequenceNumber;
+                            // Get the last ID for this specific stream
+                            String lastIdString = lastStreamIds.getOrDefault(streamKey, "0-0");
+                            String[] lastIdParts = lastIdString.split("-");
+                            long lastMillisecondsTime;
+                            int lastSequenceNumber;
 
-                        try {
-                            lastMillisecondsTime = Long.parseLong(lastIdParts[0]);
-                            lastSequenceNumber = Integer.parseInt(lastIdParts[1]);
-                        } catch (NumberFormatException e) {
-                            // This should ideally not happen if lastStreamIds are always valid
-                            // but good for robustness.
-                            writer.write("-ERR Internal server error with last ID format\r\n");
-                            writer.flush();
-                            break;
-                        }
+                            try {
+                                lastMillisecondsTime = Long.parseLong(lastIdParts[0]);
+                                lastSequenceNumber = Integer.parseInt(lastIdParts[1]);
+                            } catch (NumberFormatException e) {
+                                // This should ideally not happen if lastStreamIds are always valid
+                                // but good for robustness.
+                                writer.write("-ERR Internal server error with last ID format\r\n");
+                                writer.flush();
+                                break;
+                            }
 
-                        // --- Validation Logic ---
+                            // --- Validation Logic ---
 
-                        // Rule 1: ID must be greater than 0-0
-                        if (newMillisecondsTime == 0 && newSequenceNumber == 0) {
-                            writer.write("-ERR The ID specified in XADD must be greater than 0-0\r\n");
-                            writer.flush();
-                            break;
-                        }
+                            // Rule 1: ID must be greater than 0-0
+                            if (newMillisecondsTime == 0 && newSequenceNumber == 0) {
+                                writer.write("-ERR The ID specified in XADD must be greater than 0-0\r\n");
+                                writer.flush();
+                                break;
+                            }
 
-                        // Rule 2: ID must be greater than the last entry's ID
-                        if (newMillisecondsTime < lastMillisecondsTime) {
-                            writer.write(
-                                    "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n");
-                            writer.flush();
-                            break;
-                        } else if (newMillisecondsTime == lastMillisecondsTime) {
-                            if (newSequenceNumber <= lastSequenceNumber) {
+                            // Rule 2: ID must be greater than the last entry's ID
+                            if (newMillisecondsTime < lastMillisecondsTime) {
                                 writer.write(
                                         "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n");
                                 writer.flush();
                                 break;
+                            } else if (newMillisecondsTime == lastMillisecondsTime) {
+                                if (newSequenceNumber <= lastSequenceNumber) {
+                                    writer.write(
+                                            "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n");
+                                    writer.flush();
+                                    break;
+                                }
                             }
                         }
-
                         // --- End Validation Logic ---
 
                         // If validation passes, process the entry
@@ -424,6 +453,7 @@ public class ClientHandler extends Thread {
                                                             // you are only concerned with the *last* ID for validation.
 
                         // Update the last ID for this stream
+                        newIdString = newIdString.endsWith("*") ? genereatedId : newIdString;
                         lastStreamIds.put(streamKey, newIdString);
 
                         System.out.println(
