@@ -334,8 +334,12 @@ public class ClientHandler extends Thread {
 
                         String streamKey = arguments[1]; // The stream key
                         String newIdString = arguments[2]; // The ID (e.g., "1526919030474-0")
-
                         String genereatedId = "";
+
+                        if (newIdString.startsWith("*")) {
+                            newIdString = System.currentTimeMillis() + "-*";
+                        }
+
                         // Parse the new ID
                         String[] newIdParts = newIdString.split("-");
                         long newMillisecondsTime;
