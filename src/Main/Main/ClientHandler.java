@@ -3,6 +3,7 @@ package Main;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -20,7 +21,7 @@ public class ClientHandler extends Thread {
     // A thread-safe hash map to store expiration timestamps for keys in the store.
     private ConcurrentHashMap<String, Long> expiry;
     // A thread-safe hash map to store streams
-    private ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams;
+    private ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams;
     // A boolean indicating whether this server instance is a master.
     private boolean isMaster;
     // A thread-safe list of BufferedWriter objects for all connected replicas.
@@ -48,7 +49,7 @@ public class ClientHandler extends Thread {
             Socket clientSocket,
             ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry,
-            ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams,
+            ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams,
             ConcurrentHashMap<String, String> lastStreamIds,
             boolean isMaster,
             CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters,
@@ -325,145 +326,12 @@ public class ClientHandler extends Thread {
                         break;
                     }
                     case "XADD": {
-                        if (arguments.length < 4) { // Check for minimum arguments and odd
-                            // number of field-value pairs
-                            writer.write("-ERR wrong number of arguments for 'XADD' command\r\n");
+                        try {
+                            StreamHandler.handleStreamCommand(arguments, lastStreamIds, streams, writer);
+                        } catch (Exception e) {
+                            writer.write("-ERR " + e.getMessage() + "\r\n");
                             writer.flush();
-                            break;
                         }
-
-                        String streamKey = arguments[1]; // The stream key
-                        String newIdString = arguments[2]; // The ID (e.g., "1526919030474-0")
-                        String genereatedId = "";
-
-                        if (newIdString.startsWith("*")) {
-                            newIdString = System.currentTimeMillis() + "-*";
-                        }
-
-                        // Parse the new ID
-                        String[] newIdParts = newIdString.split("-");
-                        long newMillisecondsTime;
-                        int newSequenceNumber;
-                        if (newIdParts[1].equals("*")) {
-
-                            String lastIdString = lastStreamIds.getOrDefault(streamKey, "0-0");
-                            String[] lastIdParts = lastIdString.split("-");
-                            long lastMillisecondsTime;
-                            int lastSequenceNumber;
-
-                            try {
-                                lastMillisecondsTime = Long.parseLong(lastIdParts[0]);
-                                lastSequenceNumber = Integer.parseInt(lastIdParts[1]);
-                            } catch (NumberFormatException e) {
-                                // This should ideally not happen if lastStreamIds are always valid
-                                // but good for robustness.
-                                writer.write("-ERR Internal server error with last ID format\r\n");
-                                writer.flush();
-                                break;
-                            }
-                            if (Long.parseLong(newIdParts[0]) == lastMillisecondsTime) {
-                                genereatedId = newIdParts[0] + "-" + (lastSequenceNumber + 1);
-                                writer.write("$" + genereatedId.length() + "\r\n" + genereatedId + "\r\n");
-                            } else {
-                                genereatedId = newIdParts[0] + "-" + "0\r\n";
-                                writer.write("$" + genereatedId.length() + "\r\n" + genereatedId + "\r\n");
-                            }
-                            System.out.println(genereatedId);
-
-                            writer.flush();
-                        } else {
-                            try {
-                                newMillisecondsTime = Long.parseLong(newIdParts[0]);
-                                newSequenceNumber = Integer.parseInt(newIdParts[1]);
-                            } catch (NumberFormatException e) {
-                                writer.write("-ERR Invalid ID format\r\n"); // Handle cases where ID parts are not
-                                                                            // numbers
-                                writer.flush();
-                                break;
-                            }
-
-                            // Get the last ID for this specific stream
-                            String lastIdString = lastStreamIds.getOrDefault(streamKey, "0-0");
-                            String[] lastIdParts = lastIdString.split("-");
-                            long lastMillisecondsTime;
-                            int lastSequenceNumber;
-
-                            try {
-                                lastMillisecondsTime = Long.parseLong(lastIdParts[0]);
-                                lastSequenceNumber = Integer.parseInt(lastIdParts[1]);
-                            } catch (NumberFormatException e) {
-                                // This should ideally not happen if lastStreamIds are always valid
-                                // but good for robustness.
-                                writer.write("-ERR Internal server error with last ID format\r\n");
-                                writer.flush();
-                                break;
-                            }
-
-                            // --- Validation Logic ---
-
-                            // Rule 1: ID must be greater than 0-0
-                            if (newMillisecondsTime == 0 && newSequenceNumber == 0) {
-                                writer.write("-ERR The ID specified in XADD must be greater than 0-0\r\n");
-                                writer.flush();
-                                break;
-                            }
-
-                            // Rule 2: ID must be greater than the last entry's ID
-                            if (newMillisecondsTime < lastMillisecondsTime) {
-                                writer.write(
-                                        "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n");
-                                writer.flush();
-                                break;
-                            } else if (newMillisecondsTime == lastMillisecondsTime) {
-                                if (newSequenceNumber <= lastSequenceNumber) {
-                                    writer.write(
-                                            "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n");
-                                    writer.flush();
-                                    break;
-                                }
-                            }
-                        }
-                        // --- End Validation Logic ---
-
-                        // If validation passes, process the entry
-                        // Collect field-value pairs into a map
-                        ConcurrentHashMap<String, String> streamData = new ConcurrentHashMap<>();
-                        for (int i = 3; i < arguments.length; i += 2) {
-                            String field = arguments[i];
-                            String value = arguments[i + 1];
-                            streamData.put(field, value);
-                        }
-
-                        // Store the stream data and update the last ID
-                        // Note: The problem statement implies adding to a stream.
-                        // For a real Redis stream, you'd append to a list of entries,
-                        // not just replace a ConcurrentHashMap for the stream key.
-                        // For this stage, simply storing the last entry and updating the last ID might
-                        // be sufficient.
-                        // If 'streams' is meant to hold the *last* entry's data, your current approach
-                        // might be okay for now.
-                        // However, for a true stream, 'streams.put(streamKey, streamData)' would
-                        // overwrite.
-                        // You'd likely need a structure like Map<String, List<Map<String, String>>> or
-                        // similar.
-                        // For the scope of validating IDs, updating 'lastStreamIds' is key.
-
-                        // Assuming 'streams' is intended to hold the current state for simplicity
-                        // based on your original code's `streams.put(streamKey, streamData);`
-                        streams.put(streamKey, streamData); // This would overwrite previous entries for the same stream
-                                                            // key.
-                                                            // A real stream would append. For this problem, let's
-                                                            // assume
-                                                            // you are only concerned with the *last* ID for validation.
-
-                        // Update the last ID for this stream
-                        newIdString = newIdString.endsWith("*") ? genereatedId : newIdString;
-                        lastStreamIds.put(streamKey, newIdString);
-
-                        System.out.println(
-                                "Added stream: " + streamKey + " with data: " + streamData + " and ID: " + newIdString);
-                        writer.write("+" + newIdString + "\r\n"); // Redis usually responds with the ID
-                        writer.flush();
                         break;
                     }
                     case "TYPE": {

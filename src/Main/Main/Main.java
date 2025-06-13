@@ -3,6 +3,7 @@ package Main;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList; // For thread-safe list of replica writers
 import java.nio.charset.StandardCharsets;
@@ -16,7 +17,7 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> streams = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, String> lastStreamIds = new ConcurrentHashMap<>();
     // for checking replica or master status of THIS server instance
     private static boolean isMaster = true; // Default to master
