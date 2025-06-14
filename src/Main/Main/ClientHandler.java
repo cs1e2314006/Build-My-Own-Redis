@@ -352,6 +352,12 @@ public class ClientHandler extends Thread {
                         Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = idMap.entrySet()
                                 .iterator();
                         Boolean flag = false;
+                        if (starting.equals("-"))
+                            flag = true;
+                        else if (starting.equals("+")) {
+                            starting = ending;
+                            ending = "";
+                        }
                         while (iterator.hasNext()) {
                             Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
                             String id = currentEntry.getKey();
