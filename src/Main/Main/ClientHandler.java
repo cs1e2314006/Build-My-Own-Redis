@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -348,36 +349,33 @@ public class ClientHandler extends Thread {
                         String starting = arguments[2];
                         String ending = arguments[3];
                         TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(key);
-                        List<List<String>> resultList = new CopyOnWriteArrayList<>();
-                        Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = idMap.entrySet()
-                                .iterator();
-                        Boolean flag = false;
-                        if (starting.equals("-"))
-                            flag = true;
-                        else if (starting.equals("+")) {
-                            starting = ending;
-                            ending = "";
+                        List<List<String>> resultList = new ArrayList<>();
+                        SortedMap<String, ConcurrentHashMap<String, String>> subMap;
+
+                        if (starting.equals("-")) {
+                            subMap = idMap.subMap(idMap.firstKey(),true, ending,true);
+                        } else if (starting.equals("+")) {
+                            subMap = idMap.subMap(ending, true, idMap.lastKey(), true);
+                        } else {
+                            subMap = idMap.subMap(starting,true, ending,true);
                         }
+                        System.out.println(subMap);
+                        Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet()
+                                .iterator();
                         while (iterator.hasNext()) {
                             Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
                             String id = currentEntry.getKey();
-                            if (id.equals(starting))
-                                flag = true;
-                            if (flag) {
-                                List<String> partiaList = new ArrayList<>();
-                                partiaList.add(id);
-                                Map<String, String> partialMap = currentEntry.getValue();
-                                partialMap.forEach((currentkey, currentval) -> {
-                                    partiaList.add(currentkey);
-                                    partiaList.add(currentval);
-                                });
-                                resultList.add(partiaList);
-                                if (id.equals(ending)) {
-                                    break;
-                                }
-                            }
+                            List<String> partiaList = new ArrayList<>();
+                            partiaList.add(id);
+                            Map<String, String> partialMap = currentEntry.getValue();
+                            partialMap.forEach((currentkey, currentval) -> {
+                                partiaList.add(currentkey);
+                                partiaList.add(currentval);
+                            });
+                            resultList.add(partiaList);
 
                         }
+
                         String result = RangeHelper(resultList);
                         System.out.println(result.replace("\r\n", "\\r\\n"));
                         writer.write(result);
