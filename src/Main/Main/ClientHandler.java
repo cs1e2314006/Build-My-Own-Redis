@@ -353,11 +353,11 @@ public class ClientHandler extends Thread {
                         SortedMap<String, ConcurrentHashMap<String, String>> subMap;
 
                         if (starting.equals("-")) {
-                            subMap = idMap.subMap(idMap.firstKey(),true, ending,true);
+                            subMap = idMap.subMap(idMap.firstKey(), true, ending, true);
                         } else if (starting.equals("+")) {
                             subMap = idMap.subMap(ending, true, idMap.lastKey(), true);
                         } else {
-                            subMap = idMap.subMap(starting,true, ending,true);
+                            subMap = idMap.subMap(starting, true, ending, true);
                         }
                         System.out.println(subMap);
                         Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet()
@@ -373,9 +373,7 @@ public class ClientHandler extends Thread {
                                 partiaList.add(currentval);
                             });
                             resultList.add(partiaList);
-
                         }
-
                         String result = RangeHelper(resultList);
                         System.out.println(result.replace("\r\n", "\\r\\n"));
                         writer.write(result);
@@ -383,7 +381,84 @@ public class ClientHandler extends Thread {
                         // System.out.println(resultList);
                         break;
                     }
+                    case "XREAD": {
+                        if (argsCount < 4) {
+                            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+                            writer.flush();
+                            break;
+                        } else if (argsCount == 4) {
+                            String key = arguments[2];
+                            String starting = arguments[3];
+                            TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(key);
+                            List<List<String>> resultList = new ArrayList<>();
+                            SortedMap<String, ConcurrentHashMap<String, String>> subMap;
+                            subMap = idMap.subMap(starting, false, idMap.lastKey(), true);
+                            System.out.println(subMap);
+                            Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet()
+                                    .iterator();
+                            while (iterator.hasNext()) {
+                                Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
+                                String id = currentEntry.getKey();
+                                List<String> partiaList = new ArrayList<>();
+                                partiaList.add(id);
+                                Map<String, String> partialMap = currentEntry.getValue();
+                                partialMap.forEach((currentkey, currentval) -> {
+                                    partiaList.add(currentkey);
+                                    partiaList.add(currentval);
+                                });
+                                resultList.add(partiaList);
+                            }
 
+                            String result = RangeHelper(resultList);
+                            System.out.println(result.replace("\r\n", "\\r\\n"));
+                            writer.write(result);
+                            writer.flush();
+                            // System.out.println(resultList);
+                        } else {
+                            // XREAD streams stream_key other_stream_key 0-0 0-1
+                            if ((argsCount - 2) % 2 != 0) {
+                                writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+                                writer.flush();
+                            }
+                            int i = 2, j = 0;
+                            List<String> keys = new ArrayList<>();
+                            while (j < (argsCount - 2) / 2) {
+                                keys.add(arguments[i++]);
+                                j++;
+                            }
+                            j = 0;
+                            List<String> startings = new ArrayList<>();
+                            while (j < (argsCount - 2) / 2) {
+                                startings.add(arguments[i++]);
+                                j++;
+                            }
+                            List<List<String>> resultList = new ArrayList<>();
+                            for (int index = 0; index < keys.size(); index++) {
+                                TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(keys.get(index));
+                                SortedMap<String, ConcurrentHashMap<String, String>> subMap;
+                                subMap = idMap.subMap(startings.get(index), false, idMap.lastKey(), true);
+                                System.out.println(subMap);
+                                Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap
+                                        .entrySet()
+                                        .iterator();
+                                while (iterator.hasNext()) {
+                                    Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
+                                    List<String> partiaList = new ArrayList<>();
+                                    partiaList.add("key:- " + keys.get(index));
+                                    String id = currentEntry.getKey();
+                                    partiaList.add(id);
+                                    Map<String, String> partialMap = currentEntry.getValue();
+                                    partialMap.forEach((currentkey, currentval) -> {
+                                        partiaList.add(currentkey);
+                                        partiaList.add(currentval);
+                                    });
+                                    resultList.add(partiaList);
+                                }
+                            }
+                            System.out.println(resultList);
+                        }
+                        break;
+                    }
                     case "TYPE": {
                         String key = arguments[1];
                         System.out.println(key + " " + store.containsKey(key));
