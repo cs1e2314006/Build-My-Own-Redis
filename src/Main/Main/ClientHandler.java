@@ -11,6 +11,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import Main.ReadHelper;
 
 /**
  * ClientHandler is a Thread that manages communication with a single client
@@ -383,79 +384,36 @@ public class ClientHandler extends Thread {
                     }
                     case "XREAD": {
                         if (argsCount < 4) {
-                            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+                            writer.write("-ERR wrong number of arguments for 'XREAD' command\r\n");
                             writer.flush();
                             break;
-                        } else if (argsCount == 4) {
-                            String key = arguments[2];
-                            String starting = arguments[3];
-                            TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(key);
-                            List<List<String>> resultList = new ArrayList<>();
-                            SortedMap<String, ConcurrentHashMap<String, String>> subMap;
-                            subMap = idMap.subMap(starting, false, idMap.lastKey(), true);
-                            System.out.println(subMap);
-                            Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet()
-                                    .iterator();
-                            while (iterator.hasNext()) {
-                                Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
-                                String id = currentEntry.getKey();
-                                List<String> partiaList = new ArrayList<>();
-                                partiaList.add(id);
-                                Map<String, String> partialMap = currentEntry.getValue();
-                                partialMap.forEach((currentkey, currentval) -> {
-                                    partiaList.add(currentkey);
-                                    partiaList.add(currentval);
-                                });
-                                resultList.add(partiaList);
-                            }
-
-                            String result = RangeHelper(resultList);
-                            System.out.println(result.replace("\r\n", "\\r\\n"));
-                            writer.write(result);
-                            writer.flush();
-                            // System.out.println(resultList);
                         } else {
-                            // XREAD streams stream_key other_stream_key 0-0 0-1
-                            if ((argsCount - 2) % 2 != 0) {
-                                writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
-                                writer.flush();
-                            }
-                            int i = 2, j = 0;
                             List<String> keys = new ArrayList<>();
-                            while (j < (argsCount - 2) / 2) {
-                                keys.add(arguments[i++]);
-                                j++;
-                            }
-                            j = 0;
                             List<String> startings = new ArrayList<>();
-                            while (j < (argsCount - 2) / 2) {
-                                startings.add(arguments[i++]);
-                                j++;
-                            }
-                            List<List<String>> resultList = new ArrayList<>();
-                            for (int index = 0; index < keys.size(); index++) {
-                                TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(keys.get(index));
-                                SortedMap<String, ConcurrentHashMap<String, String>> subMap;
-                                subMap = idMap.subMap(startings.get(index), false, idMap.lastKey(), true);
-                                System.out.println(subMap);
-                                Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap
-                                        .entrySet()
-                                        .iterator();
-                                while (iterator.hasNext()) {
-                                    Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
-                                    List<String> partiaList = new ArrayList<>();
-                                    partiaList.add("key:- " + keys.get(index));
-                                    String id = currentEntry.getKey();
-                                    partiaList.add(id);
-                                    Map<String, String> partialMap = currentEntry.getValue();
-                                    partialMap.forEach((currentkey, currentval) -> {
-                                        partiaList.add(currentkey);
-                                        partiaList.add(currentval);
-                                    });
-                                    resultList.add(partiaList);
+                            if (argsCount == 4) {
+                                keys.add(arguments[2]);
+                                startings.add(arguments[3]);
+                            } else {
+                                // XREAD streams stream_key other_stream_key 0-0 0-1
+                                if ((argsCount - 2) % 2 != 0) {
+                                    writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+                                    writer.flush();
+                                }
+                                int i = 2, j = 0;
+                                while (j < (argsCount - 2) / 2) {
+                                    keys.add(arguments[i++]);
+                                    j++;
+                                }
+                                j = 0;
+                                while (j < (argsCount - 2) / 2) {
+                                    startings.add(arguments[i++]);
+                                    j++;
                                 }
                             }
-                            System.out.println(resultList);
+                            String result = ReadHelper.buildXReadResp(keys, startings, streams);
+                            writer.write(result);
+                            System.out.println(result.replace("\r\n", "\\r\\n"));
+                            writer.flush();
                         }
                         break;
                     }
