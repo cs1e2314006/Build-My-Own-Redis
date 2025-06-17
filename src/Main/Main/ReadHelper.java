@@ -4,12 +4,90 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.List;
 import java.util.Map;
+import java.io.BufferedWriter;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ReadHelper {
 
     // Assume this is initialized and populated elsewhere
+    public static void read(String[] arguments,
+            BufferedWriter writer,
+            ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams) {
+        int argsCount = arguments.length;
+        Thread reader = new Thread(() -> {
+            if (argsCount < 4) {
+                try {
+                    writer.write("-ERR wrong number of arguments for 'XREAD' command\r\n");
+                    writer.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+                return;
+            } else {
+                ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> localStreams = streams;
+                System.out.println("local stream :-\n"+localStreams);
+                if (arguments[1].equalsIgnoreCase("block")) {
+                    System.out.println("inside block");
+                    try {
+                        Thread.sleep(Long.parseLong(arguments[2]));
+                    } catch (NumberFormatException | InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    localStreams = ClientHandler.getStream();
+                    System.out.println("local stream :-\n"+localStreams);
+                    String[] args = new String[argsCount - 2];
+                    int j = 0;
+                    for (int i = 0; i < argsCount; i++) {
+                        if (i == 2 || i == 1)
+                            continue;
+                        args[j++] = arguments[i];
+                    }
+                    j = 0;
+                    for (String cmd : args) {
+                        arguments[j++] = cmd;
+                    }
+                }
+                List<String> keys = new ArrayList<>();
+                List<String> startings = new ArrayList<>();
+                if (argsCount == 4) {
+                    keys.add(arguments[2]);
+                    startings.add(arguments[3]);
+                } else {
+                    // XREAD streams stream_key other_stream_key 0-0 0-1
+                    if ((argsCount - 2) % 2 != 0) {
+                        try {
+                            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+                            writer.flush();
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    int i = 2, j = 0;
+                    while (j < (argsCount - 2) / 2) {
+                        keys.add(arguments[i++]);
+                        j++;
+                    }
+                    j = 0;
+                    while (j < (argsCount - 2) / 2) {
+                        startings.add(arguments[i++]);
+                        j++;
+                    }
+                }
+                String result = buildXReadResp(keys, startings, localStreams);
+                System.out.println(result.replace("\r\n", "\\r\\n"));
+                try {
+                    writer.write(result);
+                    writer.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+        });
+        reader.start();
+    }
 
     public static String buildXReadResp(List<String> streamKeys, List<String> lastIds,
             ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams) {

@@ -27,7 +27,7 @@ public class ClientHandler extends Thread {
     // A thread-safe hash map to store expiration timestamps for keys in the store.
     private ConcurrentHashMap<String, Long> expiry;
     // A thread-safe hash map to store streams
-    private ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams;
+    private static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams;
     // A boolean indicating whether this server instance is a master.
     private boolean isMaster;
     // A thread-safe list of BufferedWriter objects for all connected replicas.
@@ -283,7 +283,7 @@ public class ClientHandler extends Thread {
                                     + arguments[2]);
                         } else if (!isMaster && arguments.length >= 3 && "getack".equalsIgnoreCase(arguments[1])) {
                             System.out.println("sending reply for ack cmd");
-                            writer.write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n" + "$"
+                            writer.write("*3\r\n\r\nREPLCONF\r\n\r\nACK\r\n" + "$"
                                     + ReplicaClient.offset.toString().length() + "\r\n" + ReplicaClient.offset
                                     + "\r\n");
                             writer.flush();
@@ -376,45 +376,14 @@ public class ClientHandler extends Thread {
                             resultList.add(partiaList);
                         }
                         String result = RangeHelper(resultList);
-                        System.out.println(result.replace("\r\n", "\\r\\n"));
+                        System.out.println(result.replace("\r\n", "\r\n"));
                         writer.write(result);
                         writer.flush();
                         // System.out.println(resultList);
                         break;
                     }
                     case "XREAD": {
-                        if (argsCount < 4) {
-                            writer.write("-ERR wrong number of arguments for 'XREAD' command\r\n");
-                            writer.flush();
-                            break;
-                        } else {
-                            List<String> keys = new ArrayList<>();
-                            List<String> startings = new ArrayList<>();
-                            if (argsCount == 4) {
-                                keys.add(arguments[2]);
-                                startings.add(arguments[3]);
-                            } else {
-                                // XREAD streams stream_key other_stream_key 0-0 0-1
-                                if ((argsCount - 2) % 2 != 0) {
-                                    writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
-                                    writer.flush();
-                                }
-                                int i = 2, j = 0;
-                                while (j < (argsCount - 2) / 2) {
-                                    keys.add(arguments[i++]);
-                                    j++;
-                                }
-                                j = 0;
-                                while (j < (argsCount - 2) / 2) {
-                                    startings.add(arguments[i++]);
-                                    j++;
-                                }
-                            }
-                            String result = ReadHelper.buildXReadResp(keys, startings, streams);
-                            writer.write(result);
-                            System.out.println(result.replace("\r\n", "\\r\\n"));
-                            writer.flush();
-                        }
+                        ReadHelper.read(arguments, writer, streams);
                         break;
                     }
                     case "TYPE": {
@@ -475,5 +444,9 @@ public class ClientHandler extends Thread {
             mainString += partialString;
         }
         return mainString;
+    }
+
+    public static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> getStream() {
+        return streams;
     }
 }
