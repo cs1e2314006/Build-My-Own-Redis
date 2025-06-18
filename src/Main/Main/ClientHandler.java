@@ -37,7 +37,7 @@ public class ClientHandler extends Thread {
     private String master_replID;
     // The replication offset of the master server. Used in replication handshakes.
     private int master_repl_offset;
-    private ConcurrentHashMap<String, String> lastStreamIds;
+    private static ConcurrentHashMap<String, String> lastStreamIds;
 
     /**
      * Constructor for ClientHandler.
@@ -383,7 +383,7 @@ public class ClientHandler extends Thread {
                         break;
                     }
                     case "XREAD": {
-                        ReadHelper.read(arguments, writer, streams);
+                        ReadHelper.read(arguments, writer, streams, lastStreamIds);
                         break;
                     }
                     case "TYPE": {
@@ -448,5 +448,9 @@ public class ClientHandler extends Thread {
 
     public static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> getStream() {
         return streams;
+    }
+
+    public static ConcurrentHashMap<String, String> getlastStream() {
+        return lastStreamIds;
     }
 }

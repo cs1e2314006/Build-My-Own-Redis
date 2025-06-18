@@ -14,78 +14,94 @@ public class ReadHelper {
     // Assume this is initialized and populated elsewhere
     public static void read(String[] arguments,
             BufferedWriter writer,
-            ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams) {
-        int argsCount = arguments.length;
+            ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams,
+            ConcurrentHashMap<String, String> lastStreamIds) {
+
         Thread reader = new Thread(() -> {
-            if (argsCount < 4) {
-                try {
+            try {
+                int argsCount = arguments.length;
+                if (argsCount < 4) {
                     writer.write("-ERR wrong number of arguments for 'XREAD' command\r\n");
                     writer.flush();
-                } catch (IOException e) {
-                    e.printStackTrace();
+                    return;
                 }
-                return;
-            } else {
-                ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> localStreams = streams;
-                System.out.println("local stream :-\n"+localStreams);
+
+                boolean isBlocking = false;
+                long blockMillis = 0;
+                int streamStartIndex = 1;
+
+                // Check if BLOCK is used
                 if (arguments[1].equalsIgnoreCase("block")) {
-                    System.out.println("inside block");
+                    isBlocking = true;
                     try {
-                        Thread.sleep(Long.parseLong(arguments[2]));
-                    } catch (NumberFormatException | InterruptedException e) {
-                        e.printStackTrace();
+                        blockMillis = Long.parseLong(arguments[2]);
+                    } catch (NumberFormatException e) {
+                        writer.write("-ERR invalid BLOCK duration\r\n");
+                        writer.flush();
+                        return;
                     }
-                    localStreams = ClientHandler.getStream();
-                    System.out.println("local stream :-\n"+localStreams);
-                    String[] args = new String[argsCount - 2];
-                    int j = 0;
-                    for (int i = 0; i < argsCount; i++) {
-                        if (i == 2 || i == 1)
-                            continue;
-                        args[j++] = arguments[i];
-                    }
-                    j = 0;
-                    for (String cmd : args) {
-                        arguments[j++] = cmd;
-                    }
+                    streamStartIndex = 3; // Skip block + time
                 }
+
+                if (!arguments[streamStartIndex].equalsIgnoreCase("streams")) {
+                    writer.write("-ERR syntax error: expected 'streams'\r\n");
+                    writer.flush();
+                    return;
+                }
+
+                // Parse keys and starting IDs
+                int numStreams = (argsCount - (streamStartIndex + 1)) / 2;
                 List<String> keys = new ArrayList<>();
                 List<String> startings = new ArrayList<>();
-                if (argsCount == 4) {
-                    keys.add(arguments[2]);
-                    startings.add(arguments[3]);
-                } else {
-                    // XREAD streams stream_key other_stream_key 0-0 0-1
-                    if ((argsCount - 2) % 2 != 0) {
-                        try {
-                            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+
+                for (int i = 0; i < numStreams; i++) {
+                    keys.add(arguments[streamStartIndex + 1 + i]);
+                }
+
+                for (int i = 0; i < numStreams; i++) {
+                    startings.add(arguments[streamStartIndex + 1 + numStreams + i]);
+                }
+                String lastid = lastStreamIds.get(keys.get(0));
+                // Blocking behavior
+                if (isBlocking) {
+                    long deadline = System.currentTimeMillis() + blockMillis;
+
+                    while (System.currentTimeMillis() < deadline) {
+                        ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> updatedStreams = ClientHandler
+                                .getStream();
+                        String result = buildXReadResp(keys, startings, updatedStreams);
+
+                        if (!result.equals("*0\r\n") && ClientHandler.getlastStream().get(keys.get(0)) != lastid) {
+
+                            writer.write(result);
                             writer.flush();
-                        } catch (IOException e) {
-                            e.printStackTrace();
+                            return;
+                        }
+
+                        try {
+                            Thread.sleep(5); // small polling interval
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt(); // good practice
+                            break;
                         }
                     }
-                    int i = 2, j = 0;
-                    while (j < (argsCount - 2) / 2) {
-                        keys.add(arguments[i++]);
-                        j++;
-                    }
-                    j = 0;
-                    while (j < (argsCount - 2) / 2) {
-                        startings.add(arguments[i++]);
-                        j++;
-                    }
-                }
-                String result = buildXReadResp(keys, startings, localStreams);
-                System.out.println(result.replace("\r\n", "\\r\\n"));
-                try {
-                    writer.write(result);
-                    writer.flush();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
 
+                    // Timeout: return RESP null bulk string
+                    writer.write("$-1\r\n");
+                    writer.flush();
+                    return;
+                }
+
+                // Non-blocking behavior
+                String result = buildXReadResp(keys, startings, streams);
+                writer.write(result);
+                writer.flush();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         });
+
         reader.start();
     }
 
