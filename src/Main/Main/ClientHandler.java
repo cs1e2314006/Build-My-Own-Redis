@@ -359,6 +359,27 @@ public class ClientHandler extends Thread {
                         writer.flush();
                         break;
                     }
+                    case "INCR": {
+                        String key = arguments[1];
+                        Long value = 0L;
+                        if (store.containsKey(key)) {
+                            try {
+                                value = Long.parseLong(store.get(key));
+                            } catch (NumberFormatException e) {
+                                writer.write("-ERR value is not an integer or out of range\r\n");
+                                writer.flush();
+                                break;
+                            }
+                            value++;
+                            store.put(key, value.toString());
+                        } else {
+                            store.put(key, "1");
+                            value = Long.parseLong(store.get(key));
+                        }
+                        writer.write(":" + value + "\r\n");
+                        writer.flush();
+                        break;
+                    }
                     default:
                         // Handles unknown commands.
                         writer.write("-ERR unknown command '" + command + "'\r\n");
