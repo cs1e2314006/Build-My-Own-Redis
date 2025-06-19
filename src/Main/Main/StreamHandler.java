@@ -3,7 +3,12 @@ package Main;
 import java.io.BufferedWriter;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.TreeMap;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects; // For Objects.requireNonNull
+import java.util.SortedMap;
 
 public class StreamHandler {
 
@@ -174,5 +179,195 @@ public class StreamHandler {
             }
             return requestedId; // Validated, so use the requested ID
         }
+    }
+
+    /**
+     * Handles the Redis 'XRANGE' command, which retrieves a range of entries from a
+     * stream.
+     * The command format is typically `XRANGE key start_id end_id`.
+     *
+     * @param arguments An array of strings representing the command and its
+     *                  parameters.
+     *                  Expected format: `["XRANGE", "stream_key", "start_id",
+     *                  "end_id"]`.
+     * @param writer    A BufferedWriter used to send the RESP (Redis Serialization
+     *                  Protocol)
+     *                  formatted response back to the client.
+     * @throws Exception If an I/O error occurs during writing to the client.
+     */
+    public static void rangeCommandHandler(String[] arguments, BufferedWriter writer) throws Exception {
+        int argsCount = arguments.length;
+
+        // Validate the number of arguments. XRANGE requires at least 4 arguments:
+        // "XRANGE", "key", "start_id", "end_id"
+        if (argsCount < 4) {
+            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
+            writer.flush();
+            return;
+        }
+
+        // Extract the stream key, starting ID, and ending ID from the arguments.
+        String key = arguments[1];
+        String starting = arguments[2];
+        String ending = arguments[3];
+
+        // Retrieve the global streams data structure. This is assumed to be
+        // a ConcurrentHashMap where:
+        // - Key: Stream name (String)
+        // - Value: A TreeMap of stream entries, sorted by their IDs (String to
+        // ConcurrentHashMap)
+        // - The inner ConcurrentHashMap stores the field-value pairs of a stream entry.
+        ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams = ClientHandler
+                .getStream();
+
+        // Get the TreeMap specifically for the requested stream key.
+        TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(key);
+
+        // If the stream does not exist, send an empty array as a response.
+        if (idMap == null) {
+            writer.write("*0\r\n"); // RESP array with 0 elements
+            writer.flush();
+            return;
+        }
+
+        // This list will store the processed stream entries before formatting into
+        // RESP.
+        // Each inner list will contain [id, field1_key, field1_value, field2_key,
+        // field2_value, ...]
+        List<List<String>> resultList = new ArrayList<>();
+        SortedMap<String, ConcurrentHashMap<String, String>> subMap; // To store the filtered range of entries.
+
+        // Determine the sub-map based on the 'starting' and 'ending' IDs.
+        // Redis XRANGE command supports special IDs '-' (min ID) and '+' (max ID).
+        if (starting.equals("-")) {
+            // If starting is '-', get all entries from the first key up to and including
+            // 'ending'.
+            subMap = idMap.subMap(idMap.firstKey(), true, ending, true);
+        } else if (starting.equals("+")) {
+            // If starting is '+', this implies fetching from 'ending' to the very last
+            // entry.
+            // This behavior with '+' as a starting ID might need careful consideration
+            // based on Redis's exact XRANGE specification.
+            subMap = idMap.subMap(ending, true, idMap.lastKey(), true);
+        } else {
+            // If both 'starting' and 'ending' are specific IDs, get the sub-map
+            // from 'starting' (inclusive) to 'ending' (inclusive).
+            subMap = idMap.subMap(starting, true, ending, true);
+        }
+
+        // For debugging purposes, print the subMap to the console.
+        System.out.println(subMap);
+
+        // Iterate through the filtered entries in the subMap.
+        Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
+            String id = currentEntry.getKey(); // Get the ID of the current stream entry.
+
+            // Create a temporary list to hold the ID and its field-value pairs for the
+            // current entry.
+            List<String> partiaList = new ArrayList<>();
+            partiaList.add(id); // Add the entry ID as the first element.
+
+            // Get the map of field-value pairs for the current stream entry.
+            Map<String, String> partialMap = currentEntry.getValue();
+
+            // Iterate over the field-value pairs and add them sequentially to the temporary
+            // list.
+            partialMap.forEach((currentkey, currentval) -> {
+                partiaList.add(currentkey); // Add the field name.
+                partiaList.add(currentval); // Add the field value.
+            });
+
+            // Add the complete entry (ID + all field-value pairs) to the main result list.
+            resultList.add(partiaList);
+        }
+
+        // Convert the list of stream entries into a RESP formatted string, ready to be
+        // sent to the client.
+        String result = RangeHelper(resultList);
+
+        // For debugging, print the final RESP result to the console with escaped
+        // newlines for readability.
+        System.out.println(result.replace("\r\n", "\\r\\n"));
+
+        // Write the RESP formatted result to the client's output stream.
+        writer.write(result);
+        writer.flush();
+    }
+
+    /**
+     * Helper method to format a list of stream entries into a Redis Serialization
+     * Protocol (RESP) array.
+     * The output format adheres to Redis's XRANGE response structure:
+     * An outer RESP Array containing inner RESP Arrays, where each inner array
+     * represents a stream entry.
+     * Each stream entry array typically contains:
+     * [entry_ID (as bulk string), [field1_name, field1_value, field2_name,
+     * field2_value, ...] (as an array of bulk strings)]
+     *
+     * @param lists A list where each element is a list representing a single stream
+     *              entry.
+     *              The inner list contains [id, key1, value1, key2, value2, ...] as
+     *              strings.
+     * @return A string formatted according to the RESP protocol, representing the
+     *         XRANGE response.
+     */
+    private static String RangeHelper(List<List<String>> lists) {
+        // Start building the main RESP array. The header indicates the total number of
+        // stream entries being returned.
+        String mainString = "*" + lists.size() + "\r\n";
+
+        // Iterate through each stream entry (which is represented as an inner
+        // List<String>).
+        for (int i = 0; i < lists.size(); i++) {
+            List<String> partilList = lists.get(i); // Get the current stream entry data.
+
+            // Each stream entry itself is an RESP array.
+            // According to Redis's XRANGE, an entry is an array of two elements:
+            // 1. The entry ID.
+            // 2. An array containing the field-value pairs.
+            // Therefore, the header for an individual entry should be "*2\r\n".
+            // The current implementation uses partilList.size(), which is (1 +
+            // num_field_value_pairs * 2).
+            // This might be a deviation from standard Redis XRANGE response format where
+            // entry is [ID, [fields...]].
+            // If `partilList.size()` is intended to represent the total number of bulk
+            // strings *within* the entry,
+            // then this line needs careful review for strict Redis compatibility.
+            String partialString = "*" + partilList.size() + "\r\n";
+
+            // Extract the entry ID, which is always the first element in the `partilList`.
+            String id = partilList.get(0);
+
+            // Format the entry ID. In Redis XRANGE, the ID is typically returned as a bulk
+            // string
+            // directly within the entry's array, not wrapped in another array of size 1.
+            // The `*1\r\n` here suggests the ID itself is treated as a single-element
+            // array.
+            // This might be a custom RESP serialization, or a misunderstanding of Redis's
+            // specific XRANGE response structure.
+            // A standard Redis XRANGE response for an entry like `[ID, [field1, value1,
+            // field2, value2]]` would look like:
+            // `*2\r\n$ID_LEN\r\nID\r\n*FIELD_COUNT\r\n$KEY1_LEN\r\nKEY1\r\n$VAL1_LEN\r\nVAL1\r\n...`
+            partialString += "*1\r\n" + "$" + id.length() + "\r\n" + id + "\r\n";
+
+            // Format the field-value pairs as a separate RESP array.
+            // The number of elements in this array is `(partilList.size() - 1)` because the
+            // first element is the ID.
+            partialString += "*" + (partilList.size() - 1) + "\r\n";
+
+            // Iterate from the second element onwards (index 1) to get field keys and
+            // values.
+            // Each key and value is formatted as a RESP bulk string.
+            for (int j = 1; j < partilList.size(); j++) {
+                partialString += "$" + partilList.get(j).length() + "\r\n" + partilList.get(j) + "\r\n";
+            }
+            // Append the fully formatted current stream entry to the main response string.
+            mainString += partialString;
+        }
+        // Return the complete RESP formatted string representing all matching stream
+        // entries.
+        return mainString;
     }
 }

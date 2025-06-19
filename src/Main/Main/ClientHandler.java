@@ -3,11 +3,6 @@ package Main;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -341,45 +336,11 @@ public class ClientHandler extends Thread {
                         break;
                     }
                     case "XRANGE": {
-                        if (argsCount < 4) {
-                            writer.write("-ERR wrong number of arguments for 'XRANGE' command\r\n");
-                            writer.flush();
-                            break;
+                        try {
+                            StreamHandler.rangeCommandHandler(arguments, writer);
+                        } catch (Exception e) {
+                            e.printStackTrace();
                         }
-                        String key = arguments[1];
-                        String starting = arguments[2];
-                        String ending = arguments[3];
-                        TreeMap<String, ConcurrentHashMap<String, String>> idMap = streams.get(key);
-                        List<List<String>> resultList = new ArrayList<>();
-                        SortedMap<String, ConcurrentHashMap<String, String>> subMap;
-
-                        if (starting.equals("-")) {
-                            subMap = idMap.subMap(idMap.firstKey(), true, ending, true);
-                        } else if (starting.equals("+")) {
-                            subMap = idMap.subMap(ending, true, idMap.lastKey(), true);
-                        } else {
-                            subMap = idMap.subMap(starting, true, ending, true);
-                        }
-                        System.out.println(subMap);
-                        Iterator<Map.Entry<String, ConcurrentHashMap<String, String>>> iterator = subMap.entrySet()
-                                .iterator();
-                        while (iterator.hasNext()) {
-                            Map.Entry<String, ConcurrentHashMap<String, String>> currentEntry = iterator.next();
-                            String id = currentEntry.getKey();
-                            List<String> partiaList = new ArrayList<>();
-                            partiaList.add(id);
-                            Map<String, String> partialMap = currentEntry.getValue();
-                            partialMap.forEach((currentkey, currentval) -> {
-                                partiaList.add(currentkey);
-                                partiaList.add(currentval);
-                            });
-                            resultList.add(partiaList);
-                        }
-                        String result = RangeHelper(resultList);
-                        System.out.println(result.replace("\r\n", "\r\n"));
-                        writer.write(result);
-                        writer.flush();
-                        // System.out.println(resultList);
                         break;
                     }
                     case "XREAD": {
@@ -428,22 +389,6 @@ public class ClientHandler extends Thread {
                 System.err.println("Error closing client socket: " + e.getMessage());
             }
         }
-    }
-
-    private static String RangeHelper(List<List<String>> lists) {
-        String mainString = "*" + lists.size() + "\r\n";
-        for (int i = 0; i < lists.size(); i++) {
-            List<String> partilList = lists.get(i);
-            String partialString = "*" + partilList.size() + "\r\n";
-            String id = partilList.get(0);
-            partialString += "*1\r\n" + "$" + id.length() + "\r\n" + id + "\r\n";
-            partialString += "*" + (partilList.size() - 1) + "\r\n";
-            for (int j = 1; j < partilList.size(); j++) {
-                partialString += "$" + partilList.get(j).length() + "\r\n" + partilList.get(j) + "\r\n";
-            }
-            mainString += partialString;
-        }
-        return mainString;
     }
 
     public static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> getStream() {
