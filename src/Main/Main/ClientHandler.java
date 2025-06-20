@@ -33,6 +33,7 @@ public class ClientHandler extends Thread {
     // The replication offset of the master server. Used in replication handshakes.
     private int master_repl_offset;
     private static ConcurrentHashMap<String, String> lastStreamIds;
+    private boolean isMultiActive = false;
 
     /**
      * Constructor for ClientHandler.
@@ -377,6 +378,19 @@ public class ClientHandler extends Thread {
                             value = Long.parseLong(store.get(key));
                         }
                         writer.write(":" + value + "\r\n");
+                        writer.flush();
+                        break;
+                    }
+                    case "MULTI": {
+                        writer.write("+OK\r\n");
+                        isMultiActive = true;
+                        writer.flush();
+                        break;
+                    }
+                    case "EXEC": {
+                        if (!isMultiActive) {
+                            writer.write("-ERR EXEC without MULTI\r\n");
+                        }
                         writer.flush();
                         break;
                     }
