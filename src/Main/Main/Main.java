@@ -17,8 +17,8 @@ public class Main {
     // write data at the same time.
     private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, String> lastStreamIds = new ConcurrentHashMap<>();
+    public static final ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams = new ConcurrentHashMap<>();
+    public static final ConcurrentHashMap<String, String> lastStreamIds = new ConcurrentHashMap<>();
     // for checking replica or master status of THIS server instance
     private static boolean isMaster = true; // Default to master
     // New: List to hold BufferedWriter for each connected replica
@@ -95,8 +95,6 @@ public class Main {
                         clientSocket,
                         store,
                         expiry,
-                        streams,
-                        lastStreamIds,
                         isMaster,
                         connectedReplicasWriters,
                         master_replID,

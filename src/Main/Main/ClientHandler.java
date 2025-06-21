@@ -3,9 +3,13 @@ package Main;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
+import Main.Main;
 import Main.ReadHelper;
 
 /**
@@ -14,6 +18,7 @@ import Main.ReadHelper;
  * It parses client commands, executes them, and sends back responses.
  * It also handles replication logic if the server is acting as a master.
  */
+@SuppressWarnings("unused")
 public class ClientHandler extends Thread {
     // The socket connection to the client.
     private Socket clientSocket;
@@ -22,7 +27,7 @@ public class ClientHandler extends Thread {
     // A thread-safe hash map to store expiration timestamps for keys in the store.
     private ConcurrentHashMap<String, Long> expiry;
     // A thread-safe hash map to store streams
-    private static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams;
+    private static ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams = Main.streams;
     // A boolean indicating whether this server instance is a master.
     private boolean isMaster;
     // A thread-safe list of BufferedWriter objects for all connected replicas.
@@ -32,8 +37,9 @@ public class ClientHandler extends Thread {
     private String master_replID;
     // The replication offset of the master server. Used in replication handshakes.
     private int master_repl_offset;
-    private static ConcurrentHashMap<String, String> lastStreamIds;
+    private static ConcurrentHashMap<String, String> lastStreamIds = Main.lastStreamIds;
     private boolean isMultiActive = false;
+    private static Queue<Supplier<String>> queuedCommands = new LinkedList<>();
 
     /**
      * Constructor for ClientHandler.
@@ -51,8 +57,6 @@ public class ClientHandler extends Thread {
             Socket clientSocket,
             ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry,
-            ConcurrentHashMap<String, TreeMap<String, ConcurrentHashMap<String, String>>> streams,
-            ConcurrentHashMap<String, String> lastStreamIds,
             boolean isMaster,
             CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters,
             String master_replID,
@@ -60,8 +64,6 @@ public class ClientHandler extends Thread {
         this.clientSocket = clientSocket;
         this.store = store;
         this.expiry = expiry;
-        this.streams = streams;
-        this.lastStreamIds = lastStreamIds;
         this.isMaster = isMaster;
         this.connectedReplicasWriters = connectedReplicasWriters;
         this.master_replID = master_replID;
@@ -208,8 +210,9 @@ public class ClientHandler extends Thread {
                     case "SET":
                     case "GET":
                         // Delegates SET and GET commands to a separate handler class.
-                        SetGetHandler.handleCommand(arguments, store, expiry, isMaster, connectedReplicasWriters,
-                                writer);
+                        SetGetHandler.handleCommand(arguments, store, expiry, isMaster, isMultiActive,
+                                connectedReplicasWriters,
+                                queuedCommands, writer);
                         break;
                     case "CONFIG":
                         // Handles CONFIG GET command for specific parameters.
@@ -362,12 +365,42 @@ public class ClientHandler extends Thread {
                     }
                     case "INCR": {
                         String key = arguments[1];
+
+                        if (isMultiActive) {
+                            // Queue a lambda/command object instead of response string
+                            queuedCommands.add(() -> {
+                                String response;
+                                Long value = 0L;
+                                if (store.containsKey(key)) {
+                                    try {
+                                        value = Long.parseLong(store.get(key));
+                                        value++;
+                                        store.put(key, value.toString());
+                                        response = ":" + value + "\r\n";
+                                    } catch (NumberFormatException e) {
+                                        response = "-ERR value is not an integer or out of range\r\n";
+                                    }
+                                } else {
+                                    store.put(key, "1");
+                                    response = ":1\r\n";
+                                }
+                                return response;
+                            });
+
+                            writer.write("+QUEUED\r\n");
+                            writer.flush();
+                            break;
+                        }
+
+                        // Not inside MULTI — execute normally
                         Long value = 0L;
+                        String response;
                         if (store.containsKey(key)) {
                             try {
                                 value = Long.parseLong(store.get(key));
                             } catch (NumberFormatException e) {
-                                writer.write("-ERR value is not an integer or out of range\r\n");
+                                response = "-ERR value is not an integer or out of range\r\n";
+                                writer.write(response);
                                 writer.flush();
                                 break;
                             }
@@ -375,25 +408,46 @@ public class ClientHandler extends Thread {
                             store.put(key, value.toString());
                         } else {
                             store.put(key, "1");
-                            value = Long.parseLong(store.get(key));
+                            value = 1L;
                         }
-                        writer.write(":" + value + "\r\n");
+
+                        response = ":" + value + "\r\n";
+                        writer.write(response);
                         writer.flush();
                         break;
                     }
+
                     case "MULTI": {
-                        writer.write("+OK\r\n");
                         isMultiActive = true;
+                        queuedCommands.clear(); // start fresh
+                        writer.write("+OK\r\n");
                         writer.flush();
                         break;
                     }
+
                     case "EXEC": {
                         if (!isMultiActive) {
                             writer.write("-ERR EXEC without MULTI\r\n");
+                            writer.flush();
+                            break;
                         }
+
+                        StringBuilder execResponse = new StringBuilder();
+                        execResponse.append("*").append(queuedCommands.size()).append("\r\n");
+
+                        while (!queuedCommands.isEmpty()) {
+                            Supplier<String> queuecommand = queuedCommands.poll();
+                            String result = queuecommand.get(); // execute deferred command
+                            execResponse.append(result);
+                        }
+
+                        isMultiActive = false; // reset transaction state
+                        System.out.println(execResponse.toString().replace("\r\n", "\\r\\n"));
+                        writer.write(execResponse.toString());
                         writer.flush();
                         break;
                     }
+
                     default:
                         // Handles unknown commands.
                         writer.write("-ERR unknown command '" + command + "'\r\n");

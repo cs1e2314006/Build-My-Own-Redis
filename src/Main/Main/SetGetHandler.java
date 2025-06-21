@@ -3,12 +3,15 @@ package Main;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.util.Iterator; // For safe removal during iteration
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
 
 // This class handles the SET and GET commands, now as a static helper.
 // It does NOT manage the client socket lifecycle.
 public class SetGetHandler {
+    private static String response = "";
 
     // Handles a single SET or GET command for a connected client.
     // It takes the BufferedWriter for the client's output stream directly.
@@ -17,143 +20,173 @@ public class SetGetHandler {
             ConcurrentHashMap<String, String> store,
             ConcurrentHashMap<String, Long> expiry,
             boolean isMaster, // Indicates if this server instance is a master
+            boolean isMultiActive,
             CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters, // List of replica output streams
+            Queue<Supplier<String>> queuedCommands,
             BufferedWriter clientWriter // The writer connected to the current client
     ) throws IOException { // Throws IOException, letting ClientHandler handle it
         String command = args[0].toUpperCase();
         System.out.println("isMaster status for command '" + command + "': " + isMaster);
 
         switch (command) {
-            case "SET":
-                if (args.length < 3) {
-                    clientWriter.write("-ERR wrong number of arguments for 'SET'\r\n");
-                    clientWriter.flush();
-                    return;
-                }
+            case "SET": {
+                if (isMultiActive) {
+                    queuedCommands.add(() -> {
+                        if (args.length < 3) {
+                            response = "-ERR wrong number of arguments for 'SET'\r\n";
+                        }
 
-                String key = args[1];
-                String value = args[2];
-                Long expireAt = null;
-                boolean nx = false;
-                boolean xx = false;
+                        String key = args[1];
+                        String value = args[2];
+                        Long expireAt = null;
+                        boolean nx = false;
+                        boolean xx = false;
 
-                for (int i = 3; i < args.length; i++) {
-                    String option = args[i].toUpperCase();
-                    switch (option) {
-                        case "EX":
-                            if (i + 1 < args.length) {
-                                try {
-                                    int seconds = Integer.parseInt(args[++i]);
-                                    expireAt = System.currentTimeMillis() + seconds * 1000L;
-                                } catch (NumberFormatException e) {
-                                    clientWriter.write("-ERR value is not an integer or out of range\r\n");
-                                    clientWriter.flush();
-                                    return;
-                                }
-                            } else {
-                                clientWriter.write("-ERR syntax error\r\n");
-                                clientWriter.flush();
-                                return;
+                        for (int i = 3; i < args.length; i++) {
+                            String option = args[i].toUpperCase();
+                            switch (option) {
+                                case "EX":
+                                    if (i + 1 < args.length) {
+                                        try {
+                                            int seconds = Integer.parseInt(args[++i]);
+                                            expireAt = System.currentTimeMillis() + seconds * 1000L;
+                                        } catch (NumberFormatException e) {
+                                            response = "-ERR value is not an integer or out of range\r\n";
+
+                                            break;
+                                        }
+                                    } else {
+                                        response = "-ERR syntax error\r\n";
+
+                                        break;
+                                    }
+                                    break;
+                                case "PX":
+                                    if (i + 1 < args.length) {
+                                        try {
+                                            int ms = Integer.parseInt(args[++i]);
+                                            expireAt = System.currentTimeMillis() + ms;
+                                        } catch (NumberFormatException e) {
+                                            response = "-ERR value is not an integer or out of range\r\n";
+
+                                            break;
+                                        }
+                                    } else {
+                                        response = "-ERR syntax error\r\n";
+
+                                        break;
+                                    }
+                                    break;
+                                case "NX":
+                                    nx = true;
+                                    break;
+                                case "XX":
+                                    xx = true;
+                                    break;
+                                default:
+                                    response = "-ERR unknown option for SET\r\n";
+
+                                    break;
                             }
-                            break;
-                        case "PX":
-                            if (i + 1 < args.length) {
-                                try {
-                                    int ms = Integer.parseInt(args[++i]);
-                                    expireAt = System.currentTimeMillis() + ms;
-                                } catch (NumberFormatException e) {
-                                    clientWriter.write("-ERR value is not an integer or out of range\r\n");
-                                    clientWriter.flush();
-                                    return;
-                                }
+                        }
+
+                        if (nx && xx) {
+                            response = "-ERR NX and XX options at the same time are not allowed\r\n";
+                        }
+
+                        boolean keyExists = store.containsKey(key);
+                        boolean performedSet = false;
+
+                        if ((nx && keyExists) || (xx && !keyExists)) {
+                            response = "$-1\r\n"; // Respond with null bulk string indicating no operation
+                                                  // done
+                        } else {
+                            store.put(key, value);
+                            if (expireAt != null) {
+                                expiry.put(key, expireAt);
+                                System.out.println("Set key: " + key + ", value: " + value + ", expires in "
+                                        + (expireAt - System.currentTimeMillis()) + "ms");
                             } else {
-                                clientWriter.write("-ERR syntax error\r\n");
-                                clientWriter.flush();
-                                return;
+                                expiry.remove(key); // Ensure no old expiry is left
+                                System.out.println("Set key: " + key + ", value: " + value);
                             }
-                            break;
-                        case "NX":
-                            nx = true;
-                            break;
-                        case "XX":
-                            xx = true;
-                            break;
-                        default:
-                            clientWriter.write("-ERR unknown option for SET\r\n");
-                            clientWriter.flush();
-                            return;
-                    }
-                }
+                            response = "+OK\r\n"; // Send success message
+                            performedSet = true;
+                        }
 
-                if (nx && xx) {
-                    clientWriter.write("-ERR NX and XX options at the same time are not allowed\r\n");
+                        // *** REPLICATION LOGIC FOR MASTER ***
+                        if (!isMaster && performedSet) {
+                            // Construct the RESP command to send to replicas
+                            String replicaCommand;
+                            System.out.println("inside this block");
+                            // For propagation, always send the full original command including options
+                            StringBuilder replicaCmdBuilder = new StringBuilder();
+                            replicaCmdBuilder.append("*").append(args.length).append("\r\n");
+                            for (String arg : args) {
+                                replicaCmdBuilder.append("$").append(arg.length()).append("\r\n").append(arg)
+                                        .append("\r\n");
+                            }
+                            replicaCommand = replicaCmdBuilder.toString();
+                            propagateCommandToReplicas(replicaCommand, connectedReplicasWriters);
+
+                        }
+                        return response;
+                    });
+                    clientWriter.write("+QUEUED\r\n");
                     clientWriter.flush();
-                    return;
-                }
-
-                boolean keyExists = store.containsKey(key);
-                boolean performedSet = false;
-
-                if ((nx && keyExists) || (xx && !keyExists)) {
-                    clientWriter.write("$-1\r\n"); // Respond with null bulk string indicating no operation done
                 } else {
-                    store.put(key, value);
-                    if (expireAt != null) {
-                        expiry.put(key, expireAt);
-                        System.out.println("Set key: " + key + ", value: " + value + ", expires in "
-                                + (expireAt - System.currentTimeMillis()) + "ms");
-                    } else {
-                        expiry.remove(key); // Ensure no old expiry is left
-                        System.out.println("Set key: " + key + ", value: " + value);
-                    }
-                    clientWriter.write("+OK\r\n"); // Send success message
-                    performedSet = true;
-                }
-
-                // *** REPLICATION LOGIC FOR MASTER ***
-                if (!isMaster && performedSet) {
-                    // Construct the RESP command to send to replicas
-                    String replicaCommand;
-                    System.out.println("inside this block");
-                    // For propagation, always send the full original command including options
-                    StringBuilder replicaCmdBuilder = new StringBuilder();
-                    replicaCmdBuilder.append("*").append(args.length).append("\r\n");
-                    for (String arg : args) {
-                        replicaCmdBuilder.append("$").append(arg.length()).append("\r\n").append(arg).append("\r\n");
-                    }
-                    replicaCommand = replicaCmdBuilder.toString();
-                    propagateCommandToReplicas(replicaCommand, connectedReplicasWriters);
-                }
-                break;
-
-            case "GET":
-                if (args.length != 2) {
-                    clientWriter.write("-ERR wrong number of arguments for 'GET'\r\n");
-                } else {
-                    key = args[1];
-                    value = store.get(key);
-                    Long expireTime = expiry.get(key);
-
-                    if (expireTime != null && System.currentTimeMillis() > expireTime) {
-                        store.remove(key);
-                        expiry.remove(key);
-                        value = null; // Mark as expired
-                    }
-
-                    if (value != null) {
-                        clientWriter.write("$" + value.length() + "\r\n" + value + "\r\n");
-                    } else {
-                        clientWriter.write("$-1\r\n");
+                    try {
+                        executeSetCommand(args, store, expiry, isMaster, isMultiActive, connectedReplicasWriters,
+                                clientWriter);
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
                 break;
+            }
 
+            case "GET": {
+                if (isMultiActive) {
+                    queuedCommands.add(() -> {
+                        if (args.length != 2) {
+                            response = "-ERR wrong number of arguments for 'GET'\r\n";
+                        } else {
+                            String key = args[1];
+                            String value = store.get(key);
+                            Long expireTime = expiry.get(key);
+
+                            if (expireTime != null && System.currentTimeMillis() > expireTime) {
+                                store.remove(key);
+                                expiry.remove(key);
+                                value = null; // Mark as expired
+                            }
+
+                            if (value != null) {
+                                response = "$" + value.length() + "\r\n" + value + "\r\n";
+                            } else {
+                                response = "$-1\r\n";
+                            }
+                        }
+                        return response;
+                    });
+                    clientWriter.write("+QUEUED\r\n");
+                    clientWriter.flush();
+                } else {
+                    try {
+                        executeGetCommand(args, clientWriter, store, expiry);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+                break;
+            }
             default:
                 // This case should ideally not be reached if commands are filtered in
                 // ClientHandler
                 clientWriter.write("-ERR unknown command\r\n");
         }
-        clientWriter.flush(); // Always flush after sending a response
+        clientWriter.flush();
+        // Always flush after sending a response
     }
 
     // This method starts a background thread to clean up expired keys.
@@ -191,6 +224,140 @@ public class SetGetHandler {
         cleanupThread.setDaemon(true); // Allow JVM to exit if only daemon threads remain
         cleanupThread.setName("ExpiryCleanupThread");
         cleanupThread.start();
+    }
+
+    private static void executeSetCommand(String[] args, // The command arguments from the client
+            ConcurrentHashMap<String, String> store,
+            ConcurrentHashMap<String, Long> expiry,
+            boolean isMaster, // Indicates if this server instance is a master
+            boolean isMultiActive,
+            CopyOnWriteArrayList<BufferedWriter> connectedReplicasWriters, // List of replica output streams
+            BufferedWriter clientWriter) throws Exception {
+        if (args.length < 3) {
+            clientWriter.write("-ERR wrong number of arguments for 'SET'\r\n");
+            clientWriter.flush();
+            return;
+        }
+
+        String key = args[1];
+        String value = args[2];
+        Long expireAt = null;
+        boolean nx = false;
+        boolean xx = false;
+
+        for (int i = 3; i < args.length; i++) {
+            String option = args[i].toUpperCase();
+            switch (option) {
+                case "EX":
+                    if (i + 1 < args.length) {
+                        try {
+                            int seconds = Integer.parseInt(args[++i]);
+                            expireAt = System.currentTimeMillis() + seconds * 1000L;
+                        } catch (NumberFormatException e) {
+                            clientWriter.write("-ERR value is not an integer or out of range\r\n");
+                            clientWriter.flush();
+                            return;
+                        }
+                    } else {
+                        clientWriter.write("-ERR syntax error\r\n");
+                        clientWriter.flush();
+                        return;
+                    }
+                    break;
+                case "PX":
+                    if (i + 1 < args.length) {
+                        try {
+                            int ms = Integer.parseInt(args[++i]);
+                            expireAt = System.currentTimeMillis() + ms;
+                        } catch (NumberFormatException e) {
+                            clientWriter.write("-ERR value is not an integer or out of range\r\n");
+                            clientWriter.flush();
+                            return;
+                        }
+                    } else {
+                        clientWriter.write("-ERR syntax error\r\n");
+                        clientWriter.flush();
+                        return;
+                    }
+                    break;
+                case "NX":
+                    nx = true;
+                    break;
+                case "XX":
+                    xx = true;
+                    break;
+                default:
+                    clientWriter.write("-ERR unknown option for SET\r\n");
+                    clientWriter.flush();
+                    return;
+            }
+        }
+
+        if (nx && xx) {
+            clientWriter.write("-ERR NX and XX options at the same time are not allowed\r\n");
+            clientWriter.flush();
+            return;
+        }
+
+        boolean keyExists = store.containsKey(key);
+        boolean performedSet = false;
+
+        if ((nx && keyExists) || (xx && !keyExists)) {
+            clientWriter.write("$-1\r\n"); // Respond with null bulk string indicating no operation done
+        } else {
+            store.put(key, value);
+            if (expireAt != null) {
+                expiry.put(key, expireAt);
+                System.out.println("Set key: " + key + ", value: " + value + ", expires in "
+                        + (expireAt - System.currentTimeMillis()) + "ms");
+            } else {
+                expiry.remove(key); // Ensure no old expiry is left
+                System.out.println("Set key: " + key + ", value: " + value);
+            }
+            clientWriter.write("+OK\r\n"); // Send success message
+            performedSet = true;
+        }
+        clientWriter.flush();
+        // *** REPLICATION LOGIC FOR MASTER ***
+        if (!isMaster && performedSet) {
+            // Construct the RESP command to send to replicas
+            String replicaCommand;
+            System.out.println("inside this block");
+            // For propagation, always send the full original command including options
+            StringBuilder replicaCmdBuilder = new StringBuilder();
+            replicaCmdBuilder.append("*").append(args.length).append("\r\n");
+            for (String arg : args) {
+                replicaCmdBuilder.append("$").append(arg.length()).append("\r\n").append(arg)
+                        .append("\r\n");
+            }
+            replicaCommand = replicaCmdBuilder.toString();
+            propagateCommandToReplicas(replicaCommand, connectedReplicasWriters);
+
+        }
+    }
+
+    private static void executeGetCommand(String args[], BufferedWriter clientWriter,
+            ConcurrentHashMap<String, String> store, ConcurrentHashMap<String, Long> expiry) throws Exception {
+        if (args.length != 2) {
+            clientWriter.write("-ERR wrong number of arguments for 'GET'\r\n");
+        } else {
+            String key = args[1];
+            String value = store.get(key);
+            Long expireTime = expiry.get(key);
+
+            if (expireTime != null && System.currentTimeMillis() > expireTime) {
+                store.remove(key);
+                expiry.remove(key);
+                value = null; // Mark as expired
+            }
+
+            if (value != null) {
+                clientWriter.write("$" + value.length() + "\r\n" + value + "\r\n");
+            } else {
+                clientWriter.write("$-1\r\n");
+            }
+        }
+        clientWriter.flush();
     }
 
     // Method to propagate commands to all connected replicas
