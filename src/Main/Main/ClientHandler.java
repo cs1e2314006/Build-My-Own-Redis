@@ -363,91 +363,150 @@ public class ClientHandler extends Thread {
                         writer.flush();
                         break;
                     }
+                    /*
+                     * 'isMultiActive' is a boolean flag indicating if a MULTI transaction is
+                     * currently active.
+                     * 'queuedCommands' is a Queue (e.g., Queue<Supplier<String>>) storing deferred
+                     * commands as lambdas.
+                     */
+
+                    // --- INCR Command ---
                     case "INCR": {
+                        // Extracts the key from the command arguments.
                         String key = arguments[1];
 
+                        // Checks if a MULTI transaction is currently active.
                         if (isMultiActive) {
-                            // Queue a lambda/command object instead of response string
+                            // --- Transactional INCR (QUEUED) ---
+                            // In MULTI mode, the command is not executed immediately.
+                            // Instead, a lambda (Supplier<String>) representing the INCR operation
+                            // is added to the 'queuedCommands' list. This lambda encapsulates the
+                            // logic to be executed later during an EXEC command.
                             queuedCommands.add(() -> {
                                 String response;
                                 Long value = 0L;
+                                // Check if the key exists in the store.
                                 if (store.containsKey(key)) {
                                     try {
+                                        // Attempt to parse the existing value as a Long.
                                         value = Long.parseLong(store.get(key));
-                                        value++;
-                                        store.put(key, value.toString());
+                                        value++; // Increment the value.
+                                        store.put(key, value.toString()); // Store the new value back.
+                                        // Format response for integer reply (e.g., ":123\r\n").
                                         response = ":" + value + "\r\n";
                                     } catch (NumberFormatException e) {
+                                        // If the existing value is not a valid integer, return an error.
                                         response = "-ERR value is not an integer or out of range\r\n";
                                     }
                                 } else {
+                                    // If the key does not exist, initialize it to "1".
                                     store.put(key, "1");
-                                    response = ":1\r\n";
+                                    response = ":1\r\n"; // Respond with the initial value.
                                 }
-                                return response;
+                                return response; // Return the response string for this specific command.
                             });
 
+                            // Sends a "+QUEUED\r\n" response to the client immediately,
+                            // indicating that the command has been successfully queued.
                             writer.write("+QUEUED\r\n");
                             writer.flush();
-                            break;
+                            break; // Exit the switch case.
                         }
 
-                        // Not inside MULTI — execute normally
+                        // --- Non-Transactional INCR (Immediate Execution) ---
+                        // If not in MULTI mode, execute the INCR command immediately.
                         Long value = 0L;
                         String response;
+                        // Check if the key exists in the store.
                         if (store.containsKey(key)) {
                             try {
+                                // Attempt to parse the existing value as a Long.
                                 value = Long.parseLong(store.get(key));
                             } catch (NumberFormatException e) {
+                                // If the existing value is not a valid integer, send an error response
+                                // and break, as the command cannot be completed.
                                 response = "-ERR value is not an integer or out of range\r\n";
                                 writer.write(response);
                                 writer.flush();
-                                break;
+                                break; // Exit the switch case.
                             }
-                            value++;
-                            store.put(key, value.toString());
+                            value++; // Increment the value.
+                            store.put(key, value.toString()); // Store the new value back.
                         } else {
+                            // If the key does not exist, initialize it to "1".
                             store.put(key, "1");
-                            value = 1L;
+                            value = 1L; // Set the current value for response.
                         }
 
+                        // Format and send the integer reply to the client.
                         response = ":" + value + "\r\n";
                         writer.write(response);
                         writer.flush();
-                        break;
+                        break; // Exit the switch case.
                     }
 
+                    // --- MULTI Command ---
                     case "MULTI": {
+                        // Sets the 'isMultiActive' flag to true, indicating the start of a transaction.
                         isMultiActive = true;
-                        queuedCommands.clear(); // start fresh
+                        // Clears any previously queued commands to start a fresh transaction.
+                        queuedCommands.clear();
+                        // Sends a "+OK\r\n" response to the client.
                         writer.write("+OK\r\n");
                         writer.flush();
-                        break;
+                        break; // Exit the switch case.
                     }
 
+                    // --- EXEC Command ---
                     case "EXEC": {
+                        // Checks if a MULTI transaction is active. EXEC without a preceding MULTI
+                        // is an error.
                         if (!isMultiActive) {
                             writer.write("-ERR EXEC without MULTI\r\n");
                             writer.flush();
-                            break;
+                            break; // Exit the switch case.
                         }
 
+                        // Initializes a StringBuilder to construct the multi-bulk response for EXEC.
+                        // The first line indicates the number of responses (queued commands count).
                         StringBuilder execResponse = new StringBuilder();
                         execResponse.append("*").append(queuedCommands.size()).append("\r\n");
 
+                        // Iterates through all queued commands, executing them one by one.
+                        // 'queuedCommands.poll()' retrieves and removes the head of the queue.
                         while (!queuedCommands.isEmpty()) {
                             Supplier<String> queuecommand = queuedCommands.poll();
-                            String result = queuecommand.get(); // execute deferred command
-                            execResponse.append(result);
+                            String result = queuecommand.get(); // Execute the deferred command (lambda).
+                            execResponse.append(result); // Append the result of the executed command.
                         }
 
-                        isMultiActive = false; // reset transaction state
+                        // Resets the transaction state after executing all commands.
+                        isMultiActive = false;
+                        // For debugging/logging, prints the response to the console.
                         System.out.println(execResponse.toString().replace("\r\n", "\\r\\n"));
+                        // Sends the complete multi-bulk response to the client.
                         writer.write(execResponse.toString());
                         writer.flush();
-                        break;
+                        break; // Exit the switch case.
                     }
 
+                    // --- DISCARD Command ---
+                    case "DISCARD": {
+                        // Checks if a MULTI transaction is active. DISCARD without a preceding MULTI
+                        // is an error.
+                        if (!isMultiActive) {
+                            writer.write("-ERR DISCARD without MULTI\r\n");
+                        } else {
+                            // If in a transaction, clear all queued commands.
+                            queuedCommands.clear();
+                            // Reset the transaction state.
+                            isMultiActive = false;
+                            // Send a "+OK\r\n" response, indicating successful discard.
+                            writer.write("+OK\r\n");
+                        }
+                        writer.flush();
+                        break; // Exit the switch case.
+                    }
                     default:
                         // Handles unknown commands.
                         writer.write("-ERR unknown command '" + command + "'\r\n");
